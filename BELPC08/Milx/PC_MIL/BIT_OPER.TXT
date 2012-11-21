@@ -1,0 +1,39 @@
+Turbo-Pascal V7.0      17.11.98 
+
+Beispiel fÅr Bit setzen/lîschen mit Mengenoperatoren: 
+
+
+ 
+ type 
+  TGpModi = record case Byte of
+              1: (Bit: set of
+                     (TrigSrc0,    {Bit 0}
+                      TrigSrc1,
+                      IndTraMode,
+                      SiglRepMode,
+                      ExTrig,
+                      ExOut,
+                      Free_6,
+                      Free_7,       {Bit 7}
+                      EvMask0,      {Bit 8}
+                      EvMask1,
+                      Free_10,
+                      Free_11,      {Bit 11}
+                      Free_12,
+                      Free_13,
+                      Free_14,
+                      Free_15);     {Bit 15}
+                  );
+              2: (Wrd: WORD;);
+           end;
+
+ var     
+ GpModi     : TGpModi;
+                    
+ begin                   
+  if TrigSrc0 in GpModi.Bit then .....                 {Bit prÅfen}
+
+  GpModi.Bit:= [];     {clear}                         {16 bit Null setzen}
+  GpModi.Bit:= [TrigSrc0] + [TrigSrc1] + [IndTraMode]; {einzelne Bits setzen}
+  GpModi.Bit:= GpModi.Bit - [TrigSrc1];                {einzelnes Bit lîschen}
+ end.

@@ -1,0 +1,34 @@
+      for Ifb_Adr := 1 TO 255 DO
+       Begin
+        Mil.Ifc_Online (Ifb_adr, RetAdr, OnlineErr);
+        if OnlineErr = NoErr then
+         begin
+          Ifb_Online[Ifb_Adr].Vorh := TRUE;
+          Ifc_Total := Ifc_Total + 1;
+          {Feststellen, ob IFK modulbus-fÑhig ist}
+          {Wenn mit Fct-Code C9 die Adresse zurÅckkommt, dann ist es eine
+           alte IFK des Typs FG380.102 und ist nicht modulbusfÑhig}
+          Fct.B.Adr := Ifb_Adr;
+          Fct.B.Fct := Fct_Rd_Status;               {C9-Status}
+          Mil.Rd (Rd_StatDta, Fct, MilErr);
+          if MilErr = No_Err then
+           begin                    {C9: nur bei IFK 380.20x ist Lo-Byte = Null}
+            if Lo(Rd_StatDta) = 0 then
+              begin                              {es kînnte eine FG380.20x sein}
+                Fct.B.Fct := Fct_Rd_Stat0;                           {C0-Status}
+                Mil.Rd (Rd_StatDta, Fct, MilErr);
+                if MilErr = No_Err then
+                  begin   {Status C0 prÅfen: bei FG380.20x ist Lo-Byte immer Adr}
+                   if Lo(Rd_StatDta) = Ifb_Adr then
+                    begin                            {ja, es ist FG 380.20x}
+                      Fct.B.Fct := Fct_Rd_IFK_ID;    {IFK-Ident lesen}
+                      Mil.Rd (Rd_StatDta, Fct, MilErr);
+                      if (Hi(Rd_StatDta) = Ifk_ID_380211_ModBus) or
+                         (Hi(Rd_StatDta) = Ifk_ID_450012_ModBus) then
+                         ifb_online[ifb_adr].Mbus := True; {Hurra: Modulbuskarte!!}
+                    end;  {if LByte = 0}
+                  end;    {if MillErr}
+              end;        {if LByte C9=0}
+           end;           {if Error C9-Rd}
+         end;
+      end;

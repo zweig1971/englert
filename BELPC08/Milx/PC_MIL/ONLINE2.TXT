@@ -1,0 +1,39 @@
+
+procedure T_Mil.Ifc_Online; {(IfcAdr: Byte; var RetAdr: Byte; var OnlineErr: TOnlineErr) }
+{ TOnlineErr= (NoErr, WrTo, RdTo, AdrErr, ModAdrErr)}
+{ TMilErr   = (No_Err, Fc_To, Rd_To, Wr_To, Io_Adr)}
+  var RdErr   : TMilErr;
+      RdData  : Word;
+      Funct   : TFct;
+      Time_Out: Boolean;
+ begin
+   RetAdr := 0;
+
+ Portw[Port_Tmr1]:= TimeWrRdy;   {Warten, bis laufender Transfer abgeschlossen}
+ repeat
+  Time_Out := Timeout1;
+ until ((Portw[Port_Stat] and Stat_Wrt_Rdy) = Stat_Wrt_Rdy) or Time_Out;
+
+   T_Mil.Reset;                               { schafft klare VerhÑltnisse!!}
+   Funct.B.Adr  := IfcAdr;
+   {Wegen Update FG380.203 kommt nur bei Fct-Code C0[H] Ifk-Adr zuÅck!!}
+   Funct.B.Fct  :=  Fct_Rd_Stat0;               {C0 Hex}
+   T_Mil.Rd (RdData, Funct, RdErr);             {TimeoutprÅfung in T.Mil.Rd}
+   if RdErr = No_Err  then
+    begin
+      RetAdr      := Lo(RdData);
+      if RetAdr = IfcAdr then
+       begin
+        OnlineErr := NoErr;                      {Adresse im Datenwort stimmt}
+       end
+      else
+       begin               {Es kamm zwar eine Antwort, aber von falscher Adr}
+        OnlineErr  := AdrErr;
+       end;
+    end  {if RdErr=No_Err}
+   else
+    begin
+      if RdErr = Wr_To  then  OnlineErr := WrTo;
+      if RdErr = Rd_To  then  OnlineErr := RdTo;
+    end;
+ end;

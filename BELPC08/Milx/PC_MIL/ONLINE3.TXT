@@ -1,0 +1,125 @@
+
+ PROCEDURE Mil_Detect_Ifc;
+  label 99;
+  CONST start_zeile = 4;
+        start_spalte =5;
+        zeile_max    =22;
+        spalte_offset=20;
+
+  VAR ifc_total  : WORD;
+      ifb_online : ARRAY[0..255] OF BOOLEAN;
+      ifb_adr    : WORD;
+      zeile,spalte: BYTE;
+      hex_str    : STRING[10];
+      i,n        : WORD;
+      RetAdr     : Byte;
+      OnlineErr  : TOnlineErr;
+      Ch         : Char;
+      Transf_Cnt : LongInt;
+
+   type TLife = (Norm, Blinc);
+   procedure Life_Sign (Mode: TLife);
+    const S_Aktiv   = 3;
+          Z_Aktiv   = 1;
+          Life_Time1 = 5000;
+          Life_Time2 = 2000;
+    var Life_Wait : LongInt;
+    begin
+      Cursor (False);
+      Set_Text_Win;
+      if Mode = Norm then
+       begin
+        Life_Wait := Life_Time2;
+        Set_Text_Win;
+        TextColor(Yellow);
+        GotoXY(S_Aktiv, Z_Aktiv);  Write (chr($7C)); Mil.Timer2_Wait (Life_Wait);
+        GotoXY(S_Aktiv, Z_Aktiv);  Write ('/');      Mil.Timer2_Wait (Life_Wait);
+        GotoXY(S_Aktiv, Z_Aktiv);  Write (chr($2D)); Mil.Timer2_Wait (Life_Wait);
+        GotoXY(S_Aktiv, Z_Aktiv);  Write ('\');      Mil.Timer2_Wait (Life_Wait);
+       end
+      else
+       begin
+         TextColor(Red+128);
+         GotoXY(S_Aktiv, Z_Aktiv); Write (chr($B2));
+       end;
+      TextColor(Black);
+      Cursor(True);
+      Set_Text_Win;
+     end; {Life_Sign}
+
+  Begin
+   ini_text_win;
+   Ini_Msg_Win;
+   Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende mit [X]');
+   Ch := Taste_Return;
+
+   repeat
+    repeat
+      Set_Text_win;
+      Transf_Cnt := Transf_Cnt+ 1;
+      ifc_total := 0;
+      zeile := start_zeile;
+      spalte:= start_spalte;
+      Ini_Text_Win;
+
+      GotoXY(06,1); ClrEol;
+      TextColor(Blue);
+      Write('Am MIL-Bus melden sich mit ['); TextColor(Black);
+      Write ('C0H'); TextColor(Blue); Write('] insgesamt IFC-Karten online: ');
+
+      TextColor(Blue);
+      GotoXY(2,2);  write(' Soll--ADR--Ist      Soll--ADR--Ist      Soll--ADR--Ist      Soll--ADR--Ist');
+      GotoXY(2,3);  write(' [Hex]....[Hex]      [Hex]....[Hex]      [Hex]....[Hex]      [Hex]....[Hex]');
+      TextColor(Black);
+      Life_Sign (Norm);
+
+      FOR ifb_adr := 0 TO 255 DO
+        Begin
+          mil.ifc_online (ifb_adr, RetAdr, OnlineErr);
+          If (OnlineErr = NoErr) or (OnlineErr = AdrErr) then
+            begin
+             if (ifb_adr=0) or (ifb_adr<>RetAdr) then
+              begin
+               TextColor(Red); {Setze Schriftfarbe}
+               GotoXY (spalte, zeile);
+               hex_str := hex_byte(ifb_adr);
+               write(hex_Byte(Ifb_Adr));                           {Solladresse}
+              end;
+
+             GotoXY (spalte+8, zeile); write(hex_Byte(RetAdr));  {Istadr}
+             TextColor(Black); ClrEol;                    {Setze Schriftfarbe}
+             zeile := zeile + 1;
+             IF (zeile > zeile_max )  THEN
+              begin
+                spalte := spalte + spalte_offset;
+               if spalte > (80 - spalte_offset) then
+                begin
+                  Ini_Err_Win;
+                  Write ('ERROR: Zuviele Fehler!!  Abbruch!! Weiter beliebige Taste!');
+                  repeat until KeyEPressed;
+                  Exit; {Zuviele Spalten}
+                end;
+
+                zeile  := start_zeile;
+              end;
+             ifc_total := ifc_total + 1;
+            end
+          else
+            begin     {Online-Error auswerten}
+
+            end; {if OnlineErr}
+        End; {FOR}
+
+     GotoXY(69,01); TextColor(White); write(ifc_total); TextColor(Black);
+     Mil.Timer2_Wait(70000);
+    until KeyPressed or (Ch = ' ');
+    if Ch = ' ' then
+      begin
+       Ini_Msg_Win;
+       Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende mit [X]');
+       repeat until KeyPressed;
+      end;
+    Ch := ReadKey;
+   until Ch in ['x','X'];
+   99:
+ End; {detect_ifc}

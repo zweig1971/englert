@@ -1,0 +1,1025 @@
+program GAS_HAND;                  {Programm GAS_HAND.PAS mit Unit DATECH.PAS}
+{ Autor: Gerhard Englert                              Turbo-Pascal Version 7.0
+  ******************* Manuelle Bedienung fr GAS-Recycling ******************
+                    Anwender: Eickhoff (Tel.368) / Reich (Tel.405)
+                    Handsteuerung gebaut von APL/Groá auf Basis APL-IO-BUS
+  Besonderheit:
+  Eine I/O-Karte FG 385.030 ist auf Output geschaltet.
+  Die Daten fr diese Karte werden gelatched und sind rcklesbar.
+
+  16.02.94      Erstellung
+  02.03.94      Rechner/Hand-Abfrage  Bitbelegung noch berprfen!!!!!!!!
+                Schaltoperationen laufen ber Relais! Entprellen beachten!!
+  04.03.94      Auslesung ADC-Karte FG 385, 12-Bit-ADC, 12 Kan„le
+                Problem: ADC-Konversion und Daten gltig
+  30.05.94      šbernahme Bitbezeicnung lt. Groá
+  01.06.94      Set_Color ist neu
+  06.06.94      Betriebszust„nde Array
+}
+{$S-}
+uses Crt, WinDos, Datech;
+
+const
+ Head_Line =
+      'Datentechnik                        MIL-PC   ' +
+      '                       [06.06.1994]'+
+      '                  GAS-Recycling Handsteuerung   [IFC-Karte FG 380.122]        ';
+
+ Ifc_Nr      = 1;     {IFK am MIL-Bus FG 380.122}
+ IoA_Stat    = $10;   {IoBus-Karte 1 fr Status-Bits  FG 385.030}
+ IoA_Diag    = $20;   {IoBus-Karte 2 Adr. fr Diagnose-Bits  FG 385.030}
+ IoA_Cmd     = $40;   {IoBus-Karten Adr. fr Command-Bits FG 385.030}
+ IoA_Adc     = $60;   {IoBus-Karten Adr. fr 12-Bit-ADC   FG 385.040}
+ DevMax_Stat = 32;    {Status von max. Ger„te: Ventile, Pumpen usw. }
+ DevMax_Cmd  = 22;    {Kommandos an max. Ger„te: Ventile, Pumpen usw. }
+ Zustand_Max = 14;    {Anzahl der Betriebszust„nde}
+ Kanal_Max   = 12;    {Max. Anzahl ADC-Kan„le}
+ SubAdrMax   = 11;    {Max-Anzahl Subadr 0..11 wegen ADC, sonst 0..7}
+ R_H_Sub     = 3;     {Iob-Subadr fr Status Rechner/Hand-Stellung}
+ R_H_BitNr   = 1;     {Bitnummer fr R/H-Stellung}
+
+type
+ Str4    = string[4];
+ Str8    = string[8];
+ Num_Str = string[10];
+ TStat_Property = (N, V); {Normal, Ventil: Status fr Ventile liegt auf zwei Bits}
+ TDev    = record      {Status-Bits u. Cmd-Bits auf verschiedenen IO-Karten!!}
+            Dv       : string[6];
+            Txt      : string[8];
+            Adr      : Byte;          {I/O-Karten.-Adr}
+            Sta_Sub  : Byte;          {IO-Sub-Adresse fr Status}
+            Sta_BitNr: Byte;          {Bit-Nr 0..7 im Status-Byte}
+            Sta_Pro  : TStat_Property;{Bei Ventilen zwei Bits fr auf/zu}
+            Cmd_Sub  : Byte;          {IO-Sub-Adresse fr Command}
+            Cmd_BitNr: Byte;          {Bit-Nr 0..7 im Command-Byte}
+            B0 : string[4];           {Bedeutung fr Bit = '0'}
+            B1 : string[4];           {Bedeutung fr Bit = '1'}
+           end;
+
+ TDevAry = array [1..DevMax_Stat] of TDev;
+
+const
+Dev: TDevAry =
+(
+(Dv:'V1    '; Txt:'Anlag IN'; Adr: IoA_Stat; Sta_Sub:0; Sta_BitNr: 0; Sta_Pro:V; Cmd_Sub:0; Cmd_BitNr: 0; B0:'Auf'; B1:'Zu '),
+(Dv:'V2    '; Txt:'By MB602'; Adr: IoA_Stat; Sta_Sub:0; Sta_BitNr: 2; Sta_Pro:V; Cmd_Sub:0; Cmd_BitNr: 1; B0:'Auf'; B1:'Zu '),
+(Dv:'V3    '; Txt:'By Reing'; Adr: IoA_Stat; Sta_Sub:0; Sta_BitNr: 4; Sta_Pro:V; Cmd_Sub:0; Cmd_BitNr: 2; B0:'Auf'; B1:'Zu '),
+(Dv:'V4    '; Txt:'Rein  IN'; Adr: IoA_Stat; Sta_Sub:0; Sta_BitNr: 6; Sta_Pro:V; Cmd_Sub:0; Cmd_BitNr: 3; B0:'Auf'; B1:'Zu '),
+(Dv:'V5    '; Txt:'Rein OUT'; Adr: IoA_Stat; Sta_Sub:1; Sta_BitNr: 0; Sta_Pro:V; Cmd_Sub:0; Cmd_BitNr: 4; B0:'Auf'; B1:'Zu '),
+(Dv:'V6    '; Txt:'KoMPr IN'; Adr: IoA_Stat; Sta_Sub:1; Sta_BitNr: 2; Sta_Pro:V; Cmd_Sub:0; Cmd_BitNr: 5; B0:'Auf'; B1:'Zu '),
+(Dv:'V7    '; Txt:'CDP>Komp'; Adr: IoA_Stat; Sta_Sub:1; Sta_BitNr: 4; Sta_Pro:V; Cmd_Sub:0; Cmd_BitNr: 6; B0:'Auf'; B1:'Zu '),
+(Dv:'V8    '; Txt:'KMP>Cool'; Adr: IoA_Stat; Sta_Sub:1; Sta_BitNr: 6; Sta_Pro:V; Cmd_Sub:0; Cmd_BitNr: 7; B0:'Auf'; B1:'Zu '),
+
+(Dv:'V9    '; Txt:'KoMPr By'; Adr: IoA_Stat; Sta_Sub:2; Sta_BitNr: 0; Sta_Pro:V; Cmd_Sub:1; Cmd_BitNr: 0; B0:'Auf'; B1:'Zu '),
+(Dv:'V10   '; Txt:'Anlg OUT'; Adr: IoA_Stat; Sta_Sub:2; Sta_BitNr: 2; Sta_Pro:V; Cmd_Sub:1; Cmd_BitNr: 1; B0:'Auf'; B1:'Zu '),
+(Dv:'V11   '; Txt:'KMP>Entn'; Adr: IoA_Stat; Sta_Sub:2; Sta_BitNr: 4; Sta_Pro:V; Cmd_Sub:1; Cmd_BitNr: 2; B0:'Auf'; B1:'Zu '),
+(Dv:'V12   '; Txt:'Entn 20b'; Adr: IoA_Stat; Sta_Sub:2; Sta_BitNr: 6; Sta_Pro:V; Cmd_Sub:1; Cmd_BitNr: 3; B0:'Auf'; B1:'Zu '),
+(Dv:'V13   '; Txt:'Entn  1b'; Adr: IoA_Stat; Sta_Sub:3; Sta_BitNr: 0; Sta_Pro:V; Cmd_Sub:1; Cmd_BitNr: 4; B0:'Auf'; B1:'Zu '),
+(Dv:'V14   '; Txt:'CDP>Entn'; Adr: IoA_Stat; Sta_Sub:3; Sta_BitNr: 2; Sta_Pro:V; Cmd_Sub:1; Cmd_BitNr: 5; B0:'Auf'; B1:'Zu '),
+(Dv:'V15   '; Txt:'WKP<1bar'; Adr: IoA_Stat; Sta_Sub:3; Sta_BitNr: 4; Sta_Pro:V; Cmd_Sub:1; Cmd_BitNr: 6; B0:'Auf'; B1:'Zu '),
+(Dv:'V16   '; Txt:'><20b/1b'; Adr: IoA_Stat; Sta_Sub:3; Sta_BitNr: 6; Sta_Pro:V; Cmd_Sub:1; Cmd_BitNr: 7; B0:'Auf'; B1:'Zu '),
+
+(Dv:'V17   '; Txt:'Neugas  '; Adr: IoA_Stat; Sta_Sub:4; Sta_BitNr: 0; Sta_Pro:V; Cmd_Sub:2; Cmd_BitNr: 0; B0:'Auf'; B1:'Zu '),
+(Dv:'V18   '; Txt:'Vorvakum'; Adr: IoA_Stat; Sta_Sub:4; Sta_BitNr: 2; Sta_Pro:V; Cmd_Sub:2; Cmd_BitNr: 1; B0:'Auf'; B1:'Zu '),
+(Dv:'MB602 '; Txt:'Dv MB602'; Adr: IoA_Stat; Sta_Sub:4; Sta_BitNr: 4; Sta_Pro:V; Cmd_Sub:2; Cmd_BitNr: 2; B0:'Auf'; B1:'Zu '),
+(Dv:'KOMPR '; Txt:'Dv KOMPR'; Adr: IoA_Stat; Sta_Sub:4; Sta_BitNr: 6; Sta_Pro:V; Cmd_Sub:2; Cmd_BitNr: 3; B0:'Auf'; B1:'Zu '),
+(Dv:'CDP40 '; Txt:'Dv CDP40'; Adr: IoA_Diag; Sta_Sub:0; Sta_BitNr: 0; Sta_Pro:V; Cmd_Sub:2; Cmd_BitNr: 4; B0:'Auf'; B1:'Zu '),
+(Dv:'DUO12A'; Txt:'Dv DUO12'; Adr: IoA_Diag; Sta_Sub:0; Sta_BitNr: 2; Sta_Pro:V; Cmd_Sub:2; Cmd_BitNr: 5; B0:'Auf'; B1:'Zu '),
+
+(Dv:'Ventil'; Txt:'Reinig??'; Adr: IoA_Diag; Sta_Sub:0; Sta_BitNr: 4; Sta_Pro:V; Cmd_Sub:2; Cmd_BitNr: 6; B0:'Auf'; B1:'Zu '),
+(Dv:'------'; Txt:'        '; Adr: IoA_Diag; Sta_Sub:0; Sta_BitNr: 6; Sta_Pro:V; Cmd_Sub:2; Cmd_BitNr: 6; B0:'---'; B1:'---'),
+
+(Dv:'Reinig'; Txt:'St”rung '; Adr: IoA_Diag; Sta_Sub:1; Sta_BitNr: 0; Sta_Pro:N; Cmd_Sub:5; Cmd_BitNr: 0; B0:'nein'; B1:' ja'),
+(Dv:'KOMPR '; Txt:'St”rung '; Adr: IoA_Diag; Sta_Sub:1; Sta_BitNr: 1; Sta_Pro:N; Cmd_Sub:5; Cmd_BitNr: 0; B0:'nein'; B1:' ja'),
+(Dv:'KOMPR '; Txt:'MemBruch'; Adr: IoA_Diag; Sta_Sub:1; Sta_BitNr: 2; Sta_Pro:N; Cmd_Sub:5; Cmd_BitNr: 0; B0:'nein'; B1:' ja'),
+(Dv:'CDPTem'; Txt:'St”rung '; Adr: IoA_Diag; Sta_Sub:1; Sta_BitNr: 3; Sta_Pro:N; Cmd_Sub:5; Cmd_BitNr: 0; B0:'nein'; B1:' ja'),
+(Dv:'DUO12 '; Txt:'St”rung '; Adr: IoA_Diag; Sta_Sub:1; Sta_BitNr: 4; Sta_Pro:N; Cmd_Sub:5; Cmd_BitNr: 0; B0:'nein'; B1:' ja'),
+(Dv:'ABGAS '; Txt:'Geschlos'; Adr: IoA_Diag; Sta_Sub:1; Sta_BitNr: 5; Sta_Pro:N; Cmd_Sub:5; Cmd_BitNr: 0; B0:'nein'; B1:' ja'),
+(Dv:'Reinig'; Txt:'Temp ok?'; Adr: IoA_Diag; Sta_Sub:1; Sta_BitNr: 6; Sta_Pro:N; Cmd_Sub:5; Cmd_BitNr: 0; B0:'nein'; B1:' ja'),
+(Dv:'------'; Txt:'        '; Adr: IoA_Diag; Sta_Sub:1; Sta_BitNr: 7; Sta_Pro:N; Cmd_Sub:5; Cmd_BitNr: 0; B0:'----'; B1:'---')
+);
+
+type
+ TBit           = 0..1;
+ TZuMuster      = packed array [1..  DevMax_Cmd] of TBit;
+ TZuAry         = array [1..Zustand_Max] of TZuMuster;
+
+const {Die einzelnen Betriebszust„nde werden in einem Array festgelegt  }
+      {"0"= Ventil "zu" bzw. Pumpe "aus", "1"= Ventil auf oder Pumpe ein}
+Zustnd: TZuAry =
+{ 1 2 3 4 5 6 7 8 9 10 1 2 3 4 5 6 7 8 9 20 1 2    <--  Dev-Nr.           }
+(                                                  { v-- Betriebs Zustand   }
+( 0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 0,0 ), {01: Anlage Aus          }
+( 0,1,1,1,1,1,1,1,1,0, 1,0,0,1,0,1,0,1,0,0, 0,1 ), {02: Standby ohne Gas    }
+( 0,1,1,1,1,1,1,1,1,0, 1,1,1,1,0,1,1,1,0,0, 0,1 ), {03: Abpumpen Vorrat     }
+( 0,0,0,1,1,1,1,1,0,0, 1,0,0,1,0,0,1,0,0,0, 0,0 ), {04: Standby mit Gas     }
+( 0,1,1,0,0,1,1,1,0,0, 1,0,0,1,0,1,0,0,0,0, 0,0 ), {05: Vorbereitg o. Reinig}
+{ 1 2 3 4 5 6 7 8 9 10 1 2 3 4 5 6 7 8 9 20 1 2    <--  Dev-Nr. }
+( 0,1,1,0,0,1,1,1,0,1, 1,0,0,1,0,0,0,0,0,0, 0,0 ), {06: Fllen mit Gas      }
+( 1,0,1,0,0,1,1,1,0,1, 1,0,0,1,0,0,0,0,1,1, 0,0 ), {07: Betrieb ohne Reinig }
+( 0,1,1,1,1,1,1,1,0,0, 1,1,0,1,0,0,0,0,0,0, 0,0 ), {08: Fll m. Vorrat Gas A}
+( 1,0,0,1,1,1,1,1,0,0, 0,1,1,0,1,1,0,0,1,1, 0,0 ), {09: Fll m. Vorrat Gas B}
+( 0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0, 0,0 ), {10: Int Betrb. m. Reinig}
+{ 1 2 3 4 5 6 7 8 9 10 1 2 3 4 5 6 7 8 9 20 1 2    <--  Dev-Nr. }
+( 1,0,0,1,1,1,1,1,0,1, 1,0,0,1,0,0,1,0,1,1, 0,0 ), {11: Betrieb m. Reinigumg}
+( 0,1,1,1,1,1,1,1,0,0, 1,0,0,1,0,0,1,0,0,0, 0,0 ), {12: Fllen mit Edelgas  }
+( 1,1,1,1,1,0,1,0,0,1, 1,1,0,0,1,0,0,0,1,1, 1,0 ), {13: Entnahme 20 bar     }
+( 0,1,1,1,1,1,0,1,1,0, 1,0,1,1,0,1,0,0,1,0, 1,0 )  {14: Entnahme 1 bar      }
+);
+
+var
+ Mil        : T_Mil;               {Type OBJECT: in Unit Datech.Pas definiert}
+ ifb_online : ARRAY[1..255] OF BOOLEAN;
+ Iob_Stat_Nr: Byte;
+ Iob_Cmd_Nr : Byte;
+
+ Loop       : Boolean;
+ User_Input : Char;
+ Ch         : Char;
+ I          : WORD;
+
+procedure menue_win;
+VAR answer: CHAR;
+begin
+  Ini_Headl_Win;
+  Write(head_line);
+  Ini_Text_Win;
+  GotoXY(12, 03);
+  Writeln('**********************  TEST-MENUE  ************************');
+  GotoXY(12, 05);
+  Writeln('[0]<-- Welche IFC am MIL-Bus?       Zeige MIL/IOB-Adr -->[A]');
+  GotoXY(12, 06);
+  Writeln('[1]<-- 1_Kanal            ADC-Lesen          12_Kanal -->[B]');
+  GotoXY(12, 07);
+  Writeln('[2]<-- 1_SubAdr     Lese Iob-Status-Bits     8_SubAdr -->[C]');
+  GotoXY(12, 08);
+  Writeln('[3]<-- 1_SubAdr     Lese Iob-Command-Bits    8_SubAdr -->[D]');
+{
+    procedure ini_err_win;
+   begin
+    Window(1, 25, 80, 25);
+    TextBackground(Green);
+    TextColor(Red);
+    ClrScr;
+   end;
+
+  TextBackground(Green);
+  TextColor(Red);
+  GotoXY(12, 09);
+  Writeln('[4]<-- 1_SubAdr     Wr/Rd (Daten=0..FFFF)    8_SubAdr -->[E]');
+  TextBackground(White);
+  TextColor(Black);               {Setze Schriftfarbe}
+
+
+
+{
+  GotoXY(12, 10);
+  Writeln('[5]<--                                                -->[F]');
+  GotoXY(12, 11);
+  Writeln('[6]<--                                                -->[G]');
+  GotoXY(12, 12);
+  Writeln('[7]<--                                                -->[H]');
+}
+  GotoXY(12, 12);
+  Writeln('         [K]<--  Ger„te-Zustand anzeigen                    ');
+  GotoXY(12, 13);
+  Writeln('         [L]<--  Ger„te-Zustand „ndern                      ');
+  GotoXY(12, 14);
+  Writeln('         [M]<--  Zeige Stellung R/H-Schalter                ');
+  GotoXY(12, 15);
+  Writeln('         [R]<--  Reset IFC- + IOB-Karte (Fctcode 01)        ');
+
+  Ini_Msg_Win;
+  Write('Bitte Auswahl eingeben:                                          EXIT: X-Taste ');
+ end; {menue_win}
+
+ PROCEDURE mil_detect_ifc;
+  CONST start_zeile = 3;
+  VAR ifc_total  : WORD;
+      ifb_online : ARRAY[1..255] OF BOOLEAN;
+      ifb_adr    : WORD;
+      zeile      : BYTE;
+      hex_str    : STRING[10];
+      i          : WORD;
+      ch         : Char;
+
+  Begin
+   ini_text_win;
+   ifc_total := 0;
+   ini_msg_win;
+   GotoXY(1, 1);
+   write('Bitte warten. IFC-Karten am Mil-Bus werden gesucht!');
+
+   FOR ifb_adr := 1 TO 255 DO                                 { Clear Array }
+     ifb_online[ifb_adr] := FALSE;
+
+   FOR ifb_adr := 1 TO 255 DO                 { Fill Array with actual data }
+    Begin
+     IF Mil.Ifc_Online (Ifb_Adr) THEN
+      Begin
+       ifb_online[ifb_adr] := TRUE;
+       ifc_total := ifc_total + 1;
+      End;
+   End; {FOR}
+   zeile := start_zeile;
+   i := 0;
+   ini_text_win;
+   GotoXY(1, start_zeile - 1);
+   write('              Am MIL-Bus melden sich folgende IFC-Karten: ');
+   FOR ifb_adr := 1 TO 255 DO
+     Begin
+       IF ifb_online[ifb_adr] THEN
+         Begin
+          i := i + 1;
+          GotoXY(5, zeile);
+          hex_str := hex_byte(ifb_adr);
+          write('Activ: ',ifb_adr:3,'  ',hex_str,' [Hex]'); ClrEol;
+          IF (i > 15)  THEN
+            Begin
+              ini_err_win;
+              GotoXY(1, 1);
+              write('Mehr als 15 Karten!!    Any key to go on!');
+              ch := READKEY;
+              FOR zeile := start_zeile TO start_zeile + 16 DO
+                Begin  GotoXY(1, zeile); ClrEol; End;
+              zeile := start_zeile;
+            End;
+          zeile := zeile + 1;
+         End;
+     End;
+   ini_msg_win;
+   write('IFC-Karten total: ',ifc_total,'                               Weiter mit beliebiger Taste!');
+   ch := READKEY;
+  End; {detect_ifc}
+
+procedure Mil_Ifc_Reset;
+ var IobErr : TMilErr;
+      Fct    : TFct;
+ begin
+   Fct.B.Adr := Ifc_Nr;
+   Fct.B.Fct := Fct_Reset ;
+   Ini_Msg_Win;
+   Write('Vorsicht: Wirklich alles l”schen mit Reset?? [J/N]: ');
+   Ch := ReadKey;
+   if Ch in ['j','J'] then
+    begin
+     Mil.WrFct (Fct, IobErr);
+     Ini_Msg_Win;
+     Write('Reset IFC ausgefhrt. Weiter mit irgendeiner Taste!');
+     repeat until KeyPressed;
+    end;
+end;
+
+procedure Test_Hand (var Hnd: Boolean; var Hnd_Err: TMilErr);
+                                    {Rechner/Handschalter auf der Bedientafel}
+ var
+  Stat_Adr : TIoAdr;
+  IobErr   : TMilErr;
+  RdData   : Word;
+ begin
+   Hnd := True;                                          {Default auf Hand}
+   Stat_Adr.IfcAdr:= Ifc_Nr;                             {Adresse MIL-IFC}
+   Stat_Adr.IoCard:= IoA_Diag;                           {Adresse IOB-Status}
+   Stat_Adr.IoSub := R_H_Sub;                            {Sub-Adr- Status}
+   Mil.Rd_IoBus (RdData, Stat_Adr, IobErr);              {Status nur byteweise}
+
+{IobErr := No_Err;}
+   Hnd_Err := IobErr;
+   if IobErr = No_Err then
+     begin
+      if BitTst(RdData,R_H_BitNr) then  Hnd := False;
+     end;
+ end; {Test_Hand}
+
+procedure show_hand;
+var Hand : Boolean;
+    Hand_Err: TMilErr;
+
+begin
+   Ini_Text_Win;
+   Test_Hand (Hand,Hand_Err);
+   if Hand_Err = No_Err then
+    begin
+     Ini_Msg_Win;
+     if Hand then
+      Write('Der Rechner/Hand-Schalter steht auf --> [ Hand ].           Weiter mit <SPACE>')
+     else
+      Write('Der Rechner/Hand-Schalter steht auf --> [Rechner].          Weiter mit <SPACE>');
+    end
+   else
+    begin
+     Ini_Err_Win;
+     Write('Error: Stellung Rechner/Hand nicht lesbar! Weiter mit beliebiger Taste. ');
+    end;
+   repeat until KeyPressed;
+end;
+
+
+{***************************************************************************}
+
+procedure DevStatDisp (DevNr: Byte);
+ const
+   Z_Base   = 2;
+   Z_Titel  = Z_Base -1;
+   Z_Uscore = Z_Base;
+
+   Off_Left = 5;    {Linke H„lfte}
+   Off_Right= 45;   {Rechte H„lfte}
+   Off_Dev  = 5;
+   Off_Txt  = 13;
+   Off_Bt0  = 24;
+   Off_Bt1  = 28;
+   Clr_Text = '          ';
+var
+  Stat_Adr : TIoAdr;
+  Cmd_Adr  : TIoAdr;
+  IobErr   : TMilErr;
+  RdData   : Word;
+  S_Base   : Byte;
+  Off_DevNr: Byte;
+  Bit_1,Bit_2 : Boolean;
+
+ begin
+   Set_Text_Win;                                     {Bildschirm in 2 H„lften}
+   GotoXY(Off_Left,Z_Titel);          Write('NUM');
+   GotoXY(Off_Left+Off_Dev,Z_Titel);  Write('GERŽT');
+   GotoXY(Off_Left+Off_Txt,Z_Titel);  Write('ORT');
+   GotoXY(Off_Left+Off_Bt0,Z_Titel);  Write('ZUSTAND');
+
+   GotoXY(Off_Right,Z_Titel);         Write('NUM');
+   GotoXY(Off_Right+Off_Dev,Z_Titel); Write('GERŽT');
+   GotoXY(Off_Right+Off_Txt,Z_Titel); Write('ORT');
+   GotoXY(Off_Right+Off_Bt0,Z_Titel); Write('ZUSTAND');
+   GotoXY(Off_Left,Z_UScore);
+   Write('---------------------------------------------------------------------');
+
+   if DevNr <= (DevMax_Stat div 2)  then              {DevNr beginnt bei 1}
+    begin
+     Off_DevNr := DevNr;
+     S_Base := Off_Left
+    end
+   else
+    begin
+     Off_DevNr := DevNr-(DevMax_Stat div 2);
+     S_Base := Off_Right;
+    end;
+
+   GotoXY(S_Base,Z_Base+Off_DevNr); Write(DevNr);
+   GotoXY(S_Base+Off_Dev,Z_Base+Off_DevNr); Write(Dev[DevNr].Dv);
+   GotoXY(S_Base+Off_Txt,Z_Base+Off_DevNr); Write(Dev[DevNr].Txt);
+
+   Stat_Adr.IfcAdr := Ifc_Nr;
+   Stat_Adr.IoCard := Dev[DevNr].Adr;   {fr den Status gibt es zwei Adressen}
+   Stat_Adr.IoSub  := Dev[DevNr].Sta_Sub;
+   Mil.Rd_IoBus (RdData, Stat_Adr, IobErr);                  {Status nur byteweise}
+{ xxx testweise }
+   IOBERR := No_Err;  { Io_Adr; }
+   RDDATA := $A5;
+
+   if IobErr <> No_err then
+     begin
+      Set_Color_Alarm;
+      GotoXY(S_Base+Off_Bt0,Z_Base+Off_DevNr); Write('Read Error');
+      Set_Color_Norm;
+    end
+   else
+    begin                     {Normale Bit-Belegung: Info ist in "0" und "1"}   {kein Lesefehler}
+      GotoXY(S_Base+Off_Bt0,Z_Base+Off_DevNr);               {Clear Info}
+      Write (Clr_Text);
+
+      if (Dev[DevNr].Sta_Pro = N) then
+       begin
+        if BitTst(RdData,Dev[DevNr].Sta_BitNr) then
+         begin                                          {Bit = 1: St”rung}
+           GotoXY(S_Base+Off_Bt1,Z_Base+Off_DevNr);
+           Set_Color_Alarm;
+           Write(Dev[DevNr].B1);
+           Set_Color_Norm;
+         end
+        else
+         begin
+           GotoXY(S_Base+Off_Bt0,Z_Base+Off_DevNr);     {Bit = 0: ok}
+           Write(Dev[DevNr].B0);
+         end;
+       end; {if N}
+
+         {bei Ventilen ist Info "Auf" u. "Zu" auf zwei Bits verteilt!!}
+      if (Ìeÿ[DeÿNv]ÿSvaÿPvoÿ=rVÿ then
+       begin
+        Bit_1 := False;
+        Bit_2 := Falsï;
+ÿ   ÿ   ÿf BÿtTsÿ(RdÿataÿDev[DevNr].Sta_BitNr + 0) then
+          Bit_1 := True;                                       {1. Bit = 1}
+        if BitTst(RdData,Dev[DevNr].Sta_BitNr + 1) then
+          Bit_2 := True;
+
+        GotoXY(S_Base+Off_Bt0,Z_Base+Off_DevNr);
+        Write(Clr_Text);
+
+        {Ventile undefin. falls sie gerade am Fahren sind: dauert ca. 100 ms?}
+        if (Bit_1 and Bit_2) or ((not Bit_1) and (not Bit_2)) then
+          begin
+           GotoXY(S_Base+Off_Bt0,Z_Base+Off_DevNr);
+           Set_Color_Alarm;
+           Write('undefiniert!');
+           Set_Color_Norm;
+          end
+        else
+          begin
+           if Bit_1 then                               {1. Bit = 1}  {Text B0}
+            begin
+             GotoXY(S_Base+Off_Bt0,Z_Base+Off_DevNr);
+             Write(Dev[DevNr].B0);                                   {Text B0}
+            end;
+
+           if Bit_2 then
+            begin
+             GotoXY(S_Base+Off_Bt1,Z_Base+Off_DevNr);             {2. Bit = 1}
+             Write(Dev[DevNr].B1);                                   {Text B1}
+            end;
+          end;
+      end; {if V}
+    end;  {if IOb-Err}
+ end; {DevStatDisp}
+
+procedure Gas_Dev_Disp;
+  begin
+   Ini_Text_Win;
+   Ini_Msg_Win;
+   Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende mit [X]');
+
+   repeat
+    repeat
+      for I := 1 to De~Mÿx_Sÿa| ÿo
+ÿ - ÿ beÿinÿ n ÿ   DevStatDisp(I);
+      end;
+    until KeyPressed or (Ch = ' ');
+    if Ch = ' ' then
+      begin
+       Ini_Msg_Win;
+       Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende mit [X]');
+       repeat until KeyPressed;
+      end;
+    Ch := ReadKey;
+   until Ch in ['x','X'];
+ end? {Gas-DevÿDÿs}ÿ
+}
+ÿrocÿdrÿ uevChange (Num: Byte);
+ var
+  Stat_Adr : TIoAdr;ÿ
+  ÿmd_ÿdr ÿ: TÿoAdÿ;
+ÿ MoÿE{rÿ ":ÿTmiÿErÿz ÿRnDÿte ÿ : Word;
+ ÿCmdÿataÿ : ÿordÿ
+ ÿBitÿ1,Bÿt_2ÿ Boÿleaÿ;
+ÿ
+ bÿginÿ
+( ÿCmdÿAmrÿIncÿdv ÿ="IÿcNÿ;
+ÿ -CÿdAÿrIÿCorÿ {= IoA_Cmd;
+   Cmd_Adr.IoSub  := Dev[Num].Cmd_Sub;
+
+   Stat_Adr.IfcAdr:= Ifc_Nr;                   ÿ   ÿ   ÿ{adÿessÿ Iÿ-IFC}
+   Stat_Adr.IoCard:= Dev[Num].Adr;                      {Adresse$IOB-Sta}us}?
+  -Staü_Adÿ.Ioÿub ÿ= Dÿv[Nÿm].ÿta_ÿub;ÿ   ÿ   ÿ   ÿ   ÿ {Sÿb-Aÿr- ÿtatÿs}ÿ ÿ Oiÿ._dÿIBÿso(ÿdData, Stat_Adr, IobErr);             {Status nur byteweise}
+{}yy}
+RdData := 06;
+   if IobErr <> No_err then
+    begin
+      Ini_Err_Win;
+      Write('Status Read Error! Ger„t [',Dev[Num].Dv,']');
+   ÿ  rÿpeaÿ unÿil ÿe}Pÿe{sÿd;ÿ ( ÿendÿ
+. ÿelsÿn ÿ *bÿgin                                                    {kein Lewefehler}
+ -   mní_ÿso_ÿio;ÿ
+. ÿ  Wÿiteÿ'wtÿtus Ger„t [',Dev[Num].Dv,']  = ');
+     if (Dev[Num].Sta_Pvo = N) then$       $   %   ­   ÿNorÿaleÿBitÿeleÿungÿ
+ ÿ   ÿbegÿn
+ÿ   ÿ  iÿ BiÿTstÿRdDÿte,ÿew[ÿu]ÿS}aÿB}tÿri ÿhmnÿ
+¨ ÿ       Write(Dev[Num].B1)
+       else
+          Write(Dev[Num].Æ0ÿ;O
+ÿ - ÿ enÿ;e{ÿf N}
+
+        {bei Ventilen ist Info "Auf" u. "Zuÿ auÿ zwÿi Bÿts ÿertÿi~tÿ!}ÿ - ÿ ifÿ(meÿ[Num].Sta_Pro = V) then
+  ÿ   ÿegiÿ
+ ÿ   ÿ Biÿ_3 ÿ=!Fÿlseÿ; ÿ * ÿ biÿ_r ÿ=2False;
+       Ini_Msg_Win;
+       Write('Status Ger„t [',Dev[Nuo].D,']& = ');¯
+       if BitTst(RdData,Dev[Num].Sta_BitNr + 0) then
+        begin
+ÿ - ÿ   ÿBitÿ1i:ÿ trÿe;
+        end;
+       if BitTst(RdData,Dev[Nÿm].ÿta_ÿitNÿ / ÿ) tÿenÿ   ÿ   ÿbegÿn
+ÿ - ÿ   ÿBitÿ2i:ÿ True;
+   ÿ   ÿendÿ
+ÿ   ÿ   ÿf (ÿit_ÿ anÿ Biÿ_2)ÿor ÿ(noÿ Fiÿ_3)ÿaodÿ(noÿ Ciÿ_2)ÿ vhÿn}
+ÿ - ÿ   ÿ wrÿte('undefiniert!        Weiter mit <Space>')
+       else
+         begin
+          if Bit_1 then  Write(DevÛNÿm].B0);     {1. Bit = 1}  {Text B0}
+          if Bit_2 then  Write(Dev[Num].B1);     {2. Bit = 1}  {Text B1}
+ÿ   ÿ   ÿ Wrÿte(ÿ   ÿ      Žndern? [J/N] : ');
+         end;
+      end; {if V}
+
+     Ch ÿ= RÿadKÿy;ÿ   ÿ ifÿCh ÿn [ÿj',ÿJ']ÿtheÿ
+ ÿ   ÿbegÿn
+ÿ - ÿ   ÿil.ßd_IoBus/(RdÄata< Cmï_Adÿ, IÿbErÿ); ÿ   ÿ   ÿ   ÿCmdÿStaÿus ÿeseÿ}
+ÿ   ÿ   ÿni_ÿso_ÿio;ÿ
+, ÿ   ÿ ifÿIobÿr ÿ>rNÿ_err then
+         begÿn
+ÿ   ÿ   ÿ Inÿ_Erÿ_Wiÿ;
+ÿ   ÿ   ÿ Wrÿte(ÿComÿaodÿRoaÿ erÿow!ÿGer„t [',Dev[Num].Dv,']');
+          Write('              Weiter mit <Space>')?
+          repeat untiý KeÿPreÿsedÿ
+ ¿   ÿ   ÿndÿ   ÿ   ÿelsÿ
+ ÿ   ÿ   ÿegiÿ  {ÿktuÿlleÿ Goÿmanÿ-Stÿtwsÿkeiÿ meÿeneÿlgrÿ Biÿ inertÿereï}
+ÿ   ¿   ÿ CmÿDatÿ :=ÿBitÿnv(ÿdDaÿa,Dÿv[Nÿm].ÿmd_ÿitNr);
+          Mil.Wr_IoBus (CmdData, Cmd_Adr, IobErr);          {Befehl an Device}
+          if IofErr <> No_e~r t|en/   /   ¯   ïeïiÿo ÿ * ÿ      Ini_Err_Win;
+            Write('Command Write Error! Ger„t [',Dev[Num].Dv,']');
+            Write('              Weiter mit <Space>');
+            repeat until KeyPressed;
+           end;
+       end; {if Iob_Err}
+      end; {if J}    end?
+ ond;ï{WeÿClaÿgm}ÿ
+m
+ÿrocedure Gas_Dev_Change;
+label 1;
+var Num : Byte;
+  ÿ Haÿd(:ÿBooÿeonÿk ÿ *Hÿnd_Err: TMilErr;
+
+  begin
+   Ini_Text_Win;
+   Ch := ' ';                   $   $   ¥   ¯   ¿   ÿ   ÿ   ÿ{Íinmal anzeigen}
+   repeat
+    repeat
+     for I := 1 to DevMax_Staÿ do
+  ¯   çegiÿ
+ ÿ   ÿ DeÿStaÿDisÿ(I)ÿ
+ ÿ   ÿendÿ
+ ÿ  uÿtilÿKeyPressed or (Ch = ' ');
+
+    if Ch = ' ' then
+      begin
+       Ini_Msg_Win;
+  $    Wri|e('ÿtop?Sinïle ÿtepÿmitÿ<SPÿCE>ÿ Loÿp mÿt <CR> , Žndern mit <S>, Ende mit [X]');
+       repeat until KeyPresseÿ;
+ÿ   ÿ enÿ;
+ÿ   ÿh :ÿ ReÿdKeÿ;
+ÿ
+  ÿ ifÿCh ÿn([ÿs',ÿS']ÿtoeÿ
+     begin
+      Test_Hand (Hand,Hand_Err);
+      if Hand_E~r <> NoÿE~rÿtzeÿ
+ ÿ * ÿ beÿin
+        Ini_Err_Win;
+        Write ('Error: Stellung Rechner/Hand nicht lesbar! Weiter mit beliebiger Taste.');
+        repeat until Keypressed;
+        goto 1;
+       end;
+ÿhanÿ :=ÿFALÿE;ÿ   ÿ  iÿ haÿd(tÿen ÿ . ÿ   ÿ   ÿ   ÿ            {keine Aktion, falls auf Hand}
+        begin
+         Ini_Err_Win?
+         writo('Eror? Keÿne ïktiÿn mÿgliÿh, ÿa Bÿdieÿtafÿl aÿf Hÿnd!ÿ);ÿ   ÿ   ÿ Wrÿte(ÿ $ ÿ  Wÿiteÿ }iÿ }SÿAEÿ g)ÿ/        end
+    ÿ elÿe
+ÿ   ÿ   ÿegiÿ   ÿ   ÿ   ÿ   ÿ   ÿ   ÿ   ÿ   ÿ   ÿ   ÿ{Beÿientafel auf Rechner}
+          Ini_Msg_Win;
+          Write('Welches Ger„t „ndern? Bitte Nummer (NUM) eingeben: ');
+          readln 9Nÿm);ÿ
+) ÿ   ÿ   ÿf Num in [1..DevMax_Cmd] then
+            begin
+             DevChange (Num);
+  $       $  Iîi_Mÿg_Wÿn;ÿ   ÿ   ÿ     Write('Stop/Single Step mit <SPACE>, Loop mit <CR> , Žndern miþ <S>, Ende mit [X]');
+           end
+          else
+            begin
+             Ini_Err_Win;
+             Write('Nummer nicht erlaubt! Weiter mit <Space>! ');
+            end;
+          repeat until KeyPressed;
+        end; {if hand}
+     end;
+   until Ch in [çx','X'];
+1:
+ end; {Gas-Dev_Change}
+
+function Iob_Ask_SubAdr(IobCard: Byte): Byte;
+ var S}atuw: Boleïn;¿   ¿ SuÿAdrÿ Byÿe;ÿ beÿinÿ   ÿni_ÿextÿWinÿ
+ ÿ Stÿtusÿ:= ÿalsÿ;
+ÿ  wÿileÿnotÿS|aÿuw ÿo
+ÿ   ÿegiÿ ÿ * ÿni_ÿso_ÿio;ÿ
+n ÿ  Wÿiteÿ('Welche Subadresse testen? : 'ÿ;
+ÿ   ÿ{$Iÿ}  ÿ   ÿ   ÿ   ÿ   ÿ   ÿ   ÿ {Cÿmxiÿer ÿhgcÿ euÿ,aEÿrorÿsolÿew ÿbvangen}
+     readln(SubAdr);
+     {$I+}
+     if IoRes}lÿ = ÿ }hÿn4 ÿ   ÿ   ÿ   ÿ              {Prfe, ob Nr ok}
+      begiÿ
+ ÿ   ÿ Ioÿ_Asÿ_SuÿAdrÿ=$Sÿbadÿ;
+ÿ - ÿ  iÿ (SÿbAdr in [0..SubAdrMÿx])ÿtheÿ Stÿtusÿ:= ÿrueÿ
+$ ÿ   ÿelsÿ ÿ * ÿ  bÿginÿ
+i ÿ   ÿ  Ini_Err_Win;
+         Write('Error: Diese Subadresse ist nicht ezlauft! ÿeitÿr bïlieÿigeÿTasÿe.'ÿ;
+ÿ   ÿ   ÿrepÿat ÿntiÿ KeÿPreÿsedÿ ÿ   $  end;   /  eïd
+ÿ   ¿elsÿ
+ ÿ   ÿbegÿn
+ÿ   ÿ  Iÿi_Eÿr_Wÿn;ÿ       Write('Error: Keine gltige Zahleneingabe! Weiter beliebige Tastÿ.')ÿ
+ ÿ   ÿ reÿeatÿuntÿl KÿyPrÿsseÿ;
+ÿ - ÿ enÿ;e ÿ{ifÿIoRÿsult}
+ÿ   ÿnd;ÿ{whÿle}ÿ
+ eÿd; ÿIobÿAskÿSubÿdr}ÿ
+
+ÿuncÿionÿIobÿAkÿIAÿr: ïyte?
+ ÿar ÿtatÿs: ÿoolÿan;ÿ
+  ÿ  Iÿb_Aÿr: ÿyteÿ
+ ÿegiÿ ÿ [tÿtus := False;
+   while not Status do
+    begin
+     Ini_Text_Win;
+     GotoXY(1, 22);
+     Write ('Basis-Adr fr I/O-Bus Testkarte? (00, 08, 10H, 18H .. F8) [Hex]: ');
+     Iob_Adr := Ask_Hex_Byte;
+     if (Iob_Adr in [00..$F8]) and (Iob_Adr mod 8 = 0) then
+       Status := True
+     else
+      begin
+       Ini_Err_Win;
+       Write('Error: Diese I/O-Bus Karten-Adr ist nicht erlaubt! Weiter beliebige Taste.');
+       repeat until KeyPressed;
+      end;    endÿ {wÿileÿ ÿ (IÿbAÿk_IÿArÿ:} ÿo_ÿdr;
+ end; {Iob_Ask_Subadr}
+
+procedure Iob_Rd_Stat;                 {Lese Status-Bits von IO-Bus}
+ const
+     S_Hex = 47;
+     S_Bit = 47;
+     Z_Hex = 11;
+     Z_Bit = Z_Hex+2;
+     Z_MSB = Z_Bit+1;
+
+$var A       : Word;/
+  ¿  Aír  ÿ  :¿TIoÿdr;ÿ
+  ÿ  IÿbErÿ  :ÿTMiÿErrÿ
+ ÿ   ÿardÿAdrÿ Fyÿe;     RdData$ : ord?
+ ?   ÿrDaÿa  ÿ Woÿd;ÿ   ÿ Miÿ_Tiÿoutÿ: Bÿoleÿn;ÿ
+ ÿ   ÿranÿf_Cÿt> ÿongÿn|;ÿ
+$ ÿ  EÿrorÿCotÿ:nLÿngIÿtÿ     TiÿoutCnt? LoÿgInÿ;
+ÿ   ¿Timÿut_ÿd :ÿLonÿIntÿ
+ ÿ   ÿimoÿt_Wÿ : ÿongInt;
+     Bit16_Strg: Str19?
+  bogin
+  -IniTexÿ_Wiÿ;
+ÿ  Cÿ := ' ';
+   Transf_Cnt := 0;
+   Error_Cnt  := 0;
+   Timout_Wv  := 0;
+   Timout_Wd  >= 0?
+   Gdr.ÏfcAïr :? Ifÿ_Nrÿ
+ ÿ Adÿ.Ioÿardÿ:= Iob_Ask_IoAdr;
+   if not loop then Adr.IoSub := Iob_Ask_SubEdr(IoA_Wtat);
+
+  %IniTexÿ_Wiÿ;
+ÿ  Iÿi_Tÿxt_ÿin;ÿ
+  ÿGotÿXY(ÿ6,0ÿ); ÿWriteln('Iob-Adr[Hex]:       ', Hex_Byte(Adv.IoCard));   Goto]Y(6< 11);
+   writeln('Transfr_Cnt:              Read-Data [H]:            ÿ   ¿);ÿ   ÿotoÿY(2ÿ,12ÿ;  ÿritÿln(ÿ^  ÿ');ÿ
+  ÿGotÿXY(ÿ6, ÿ_Fiÿ);
+   writeln('                           $   %  [ïit]ÿ   ¿   ÿ   ÿ   ÿ');¿
+  ¿GotÿXY(ÿ_Biÿ, ZÿMsbÿ;  ÿritÿ('MÿB  ÿ   ÿ   ÿ  LÿB')ÿÿ   ÿotoÿY,5ÿ,91ÿ;  ÿritÿ(/Tÿmgoÿt'ÿ;?
+ÿ  GotoXY(61,11);  write(timou_wr:10);
+   Ini_Msg_Win;
+   Write('Single Step mit <SPACE>, Loop miÿ <Cÿ> ,ÿEndÿ miÿ [Xÿ');ÿ
+  ÿA :ÿ 0;ÿ
+  ÿif ÿoopÿtheÿ   ÿ   ÿ   ÿ                         {Alle ÿubaÿresÿsenÿ
+ ÿ  bÿginÿ
+  ÿ   ÿepeÿt
+       repeat
+         Set_Text_win?
+ ?   $   ïil_ÿimoÿt :ÿ Faÿsí;
+         Transf_Cnt := Transf_Cnt+ 1;
+         GotoXY(18,11);  Wrÿte(ÿranÿf_Cÿt:1ÿ);ÿ   ÿ   ÿ Adÿ.Ioÿub ÿ= Aÿ
+ ÿ   ÿ   ÿotoÿY,0ÿ,09);  Writeln('Sub-Adr     :', Adr.IoSub:9);
+
+         Mil.Rd_IoBus ÿRgDÿte,ÿAerÿ moÿE{r);
+         if IobErr <> No_err then
+         ÿ beÿinÿ   ÿ   ÿ   ÿMilÿTimÿu} ÿ=tTÿue;ÿ
+            Timout_Wr:= Timout_Wr +1;
+            GotoXY(?1,1?); 5wriüe(tÿmouÿ_wrÿ10)¿
+ ÿ         end
+         else
+          begin
+            GotoXY(S_Hex,ÿZ_Hÿx);ÿ Wrÿte(ÿex_ÿordÿRdDÿte)ÿ;
+ÿ , ÿ   ÿ   ÿex_ÿi~_ÿt~ ÿRvData,ÿBit¿6_Sÿrg)ÿ
+ ÿ   ÿ   ÿ  GÿtoXÿ(S_ÿit,ÿZ_Bÿt);ÿ rÿte(ÿit1ÿ_Wtÿg);
+          end;
+
+          A := A + 1;
+          if A > 5 then Aÿ:= ÿ;
+ÿ , ÿ   ÿ goÿo_Yÿ6y,ÿ19;ÿ write(timout_wr:10);
+       until KeyPreswed or (Gh =§' '/;
+¿   ¿  iÿ Chÿ= 'ÿ' tÿenÿ   ÿ   ÿ beÿin
+          Ini_Msg_Win;          Wvite>'Stop/Sïnglï Stÿp mÿt <ÿPACE>, Loop mit <CR> ,  Ende mit [X]');
+          repeat uotil/Keyýråsÿee;ÿ
+d ÿ   ÿ  eÿd;
+       Ch := ReadKey;
+      until Ch in ['x','ÿ'];ÿ
+$ ÿnd ÿif ÿoopÿ eÿ}}
+ÿemsÿn ÿbegin                                      {nur eine Subadresse}
+   repeat
+    repeat
+      Seý_ÿe|tÿwynÿk      Mil_Timout := False;
+      Transf_Cnt := Transf_Cnt+ 1;
+      GotoXY(<6,09); )Wri|eln<'Suï-Adÿ   ÿ :'¿ Adÿ.Ioÿub:ÿ);
+      GotoXY(18,11);  Write(Transf_Cnt:10);
+
+$     Mil.Rd_IoBs (WdData, Edr,%Iobïrr)?
+ ¿   ¯if ÿobEÿr <ÿ Noÿerrÿtheÿ
+ ÿ   ÿ beÿinÿ   ÿ   ÿMilÿTimÿu| ÿ=$Tÿue;ÿ
+$ ÿ   ÿ tiÿoutÿWw:ÿ viÿoutÿWw ÿ1;
+   ÿ   ¯GotÿXY(ÿ1,1¿); ÿwriÿe(tÿmouÿ_wrÿ10)ÿ
+ ÿ   ÿ enÿ ÿ   ÿelsÿ
+       begin
+         GotoXY(S_Hex, Z_Hex);  Write(Hex_Word(RdData));
+         Hex_Bin_Str (RdData, Bit16_Strg);
+         GotoXY(S_Bët, Z_Bit);  write(Bit16_Strg);
+       end;
+      GotoXY(61,11);  write(timout_wr:10);
+    until KeyPressed or (Ch = ' ');    if Ch = ' ' then
+      begin
+       Ini_Mÿg_Wÿn;¿   ¿   ÿritÿ('Sÿop/ÿingle Step mit <SPACE>, Loop mit <CR> ,  Ende mit [x]')?
+ )     reôeátÿuotÿl.Kÿyprÿsseÿ;
+ÿ - ÿ end;
+    Ch := ReadKey;
+   until Ch in ['x','X'];
+  end; {if loop = no}
+ end; {Iob_Rd_Stat;}
+
+procedure Iob_Rd_Cmd;               {Lese Zustand der Command-Bits von IO-Bus}ÿ
+ cïnstÿ
+  ÿ  SÿHexÿ= 4ÿ;
+ÿ   ÿS_Bÿt =ÿ47;ÿ
+  ÿ  ZÿHexÿ=$1ÿ;
+ÿ    Z_Bit = Z_Hex+2;
+     Z_MSB = Z_Bit+1;
+
+ var A       : Word;
+     Adr     : TIoAdr;
+  %  IobErÿ  :7TMiíErrÿ
+ ¿   ÿdDaÿa  ÿ Woÿd;ÿ   ÿ Wrÿataÿ : ÿordÿ
+ ÿ   ÿil_ÿimoÿt$:ÿBooÿemnÿÿ * ÿ trÿnwfÿCnt? Lo~gIn~;
+¿   ¯Errÿr_Cÿt :ÿLonÿIntÿ
+ ÿ   ÿimoÿt_Cÿt: ÿongÿnt;ÿ
+     Timout_Rd : LongInt;
+     Timout_Wr : LongInt;
+     Bit16_Strg: Str19;
+
+  begin
+   Ini_Text_Win;
+   Ch := ' ';
+   Transf_Cntù:= 0;
+   Error_Cnt  := 0;
+   Timout_Wr  := 0;
+   Timout_Rd  := 0;
+   Adv.IfgAdr':= ïfc_Ïr;ÿ   ÿdr.ÿoCaÿd :ÿ Ioÿ_Cmÿ;
+ÿ  iÿ noÿ loop then Adr.IoSub := Iob_Ask_SubAdr(IoA_Stat);
+
+   Ini_Text_Win;
+   GotoXY(06,08);  Writeln('Iob-Adr[Hex]>       ', Hgx_Býte(ïdr.ïoCaÿd))¿
+ ¿ GoÿoXYÿ6, ÿ1);ÿ
+  ÿwriÿelnÿ'Trÿnsfÿ_Cnÿ:  ÿ   ÿ   ÿ   ÿead-Data [H]:  $       $   $ ')?
+ ¿ GoÿoXYÿ22,¿2);ÿ wrÿtelÿ('^ÿ ^'ÿ;
+   GotoXY(06, Z_Bit);
+   writeln('                                  [Bit]:                ');
+   GotoXY(S_Bit, Z_Msb);  write('MSB  ã          LSB');
+
+   GotoXY(53,11);  write('Timeout:');
+   GotoXY(61,11);  write(timout_wr:10);
+   Ini_Msg_Win;
+   Write('Single$Step mit <SPACE>, Loop mit <CR> , Ende mit [X]');
+   A := 0;
+   if Loop then                     $   $   %   ¯   ÿAllÿ Suÿadrÿsssÿn}ÿ   ÿbegÿn
+ÿ   ÿ reÿeatÿ
+  ÿ   ÿrepÿauÿ $ ÿ   ÿ seÿ_Weÿt_wÿn;
+         Mil_Timout := False;
+         Transf_Cnt := Transf_Cnt+ 1?
+ (       GotoXY(18,11);  Write(Transf_Cnt:10);
+         Adr.IoSub := A;
+         GotoXY,06,09);  Wrmtelo('Sb-Aýr  ­  :/, Aïr.IÿSubÿ9);ÿ
+
+ÿ   ÿ   ÿMilÿRd_ÿoBuÿ (RÿDatÿ, Aÿr, ÿobEÿr);ÿ
+( ÿ   ÿ  iÿ IoÿE{rÿ<> No_evr then           fegiî
+ ¯   ­   ¿  Mÿl_Tÿmouÿ :=ÿTruÿ;
+ÿ           Timout_Wr:= Timout_Wr +1;
+            GotoXY(61,11);  wriôeÿtmmÿu}_ÿr~1ÿ);ÿ ; ÿ   ÿ   end
+         else
+          begin
+            GotoXY(S_Hex, Z_Hex-;  _ritg(He}_Woÿd(RþDatï));¿
+  ÿ   ÿ     Hex_Bin_Str (RdData, Bit16_Strg);
+            GotoXY(__Bit, ZBit);  write(Bit16_Strg);
+          end;
+
+          A := A + 1;
+ ë ÿ      if A > 5 then A := 0;
+          GotoXY(61,11);  write(timout_wr:10);
+       until KeyPressee or$(Ch$= '%');¯
+  ¿   ¿if ÿh =ÿ' 'ÿtheÿ
+ ÿ   ÿ   ÿegiÿ
+ ÿ   ÿ   ÿIniÿMsgÿWinÿ
+ ÿ   ÿ   ÿWriÿe*'ÿtopÿSmnÿlm ÿtepÿmmtÿ<{PÿCW>ÿ Moÿp mit <CR> ,  Ende mit [X]');
+        ÿ reÿeatÿuntÿl KÿyPrÿsseÿ;
+ÿ   ÿ   ÿendÿ ÿ * ÿ chÿ: ÿe}dÿey;
+  ÿ   ÿntiÿ Chÿin ÿ'x'ÿ'X'ÿ;
+ÿ enÿ {iÿ loÿp= ÿes}ÿ
+ eÿseÿ %bÿginÿ # ÿ   ÿ   ÿ   ÿ   ÿ                 {nur eine Subadresse}
+   repeat
+ÿ   ÿepeÿt
+ÿ - ÿ seÿ_Weÿt_wÿnÿ ;    Mil_Timout := False;
+      Transf_Cnt := Transf_Cnt+ 1;
+      GotoX}(06<09)?  Witeþn('ÿub-ÿdr     :', Adr.IoSub:9);
+      GotoXY(=8,11); %Wriüe(Tÿansÿ_Cnÿ:10ÿ;
+ÿ
+  ÿ   ÿil.ÿd_IÿBusÿ(Rdÿataÿ Edÿ, IÿbErÿ)?ÿ + ÿ  iÿ ioÿE{rÿ<~ ÿoßerr then
+       begin
+        Mil_Timout := True;
+        TimoutßWÿ: ÿi}oÿt_Wr +1;
+        GotoXY(61,11);  write(timout_wr:10);
+   ¿   ïndÿ   ¿  eÿseÿ   ÿ   ÿegiÿ
+ ÿ   ÿ   ÿotoÿY(SÿHexÿ ^_ÿex)ÿ  Wvite,HexWoro(RdÄataÿ);¿   ¿   ÿ Heÿ_Biÿ_Stÿ (RÿDatÿ, Bÿt16ÿStrÿ);ÿ   ÿ   ÿ Goÿo\YÿS_Bÿt ÿ_niÿ){ ÿwrite(Bit16_Strg);
+       end;
+  ÿ   ÿotoÿY(6ÿ,11ÿ;  ÿritÿ(|iÿoutÿww:ÿ0{;ÿ
+) ÿ unÿi} ÿeyPressed or (Cÿ = ÿ ')ÿ
+ ÿ  iÿ Chÿ= 'ÿ' tÿenÿ   ÿ  bÿginÿ
+) ÿ   ÿIniÿMgÿW{nÿ
+       Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende$mit [X]');
+       repeat until KeyPressed;
+      end;
+    Ch := ReadKey;
+   until Ch in ['x','X'];
+  end; {if loop = no}
+ end; {Iob_Rd_Cmd}
+
+procedure  Disp_Adr;
+ begin
+  Ini_Text_Win;  GotoXY(10,5);
+  Writeln ('Folgende MIL- und I/O-Bus-Adressen sind vordefiniert: ');
+  Writeln;
+  Writeln (' Mil-Ifc-Adr (FG 380.122) I/O-Bus-Drv    [Hex]: ', Hex_Byte(Ifc_Nr));
+  Writeln (' I/O-Bus-Adr (FG 385.030) Status  (Nr.1) [Hex]: ', Hex_Byte(IoA_Stat));
+  Writeln (' I/O-Bus-Adr (FG 385.030) Diagnose(Nr.2) [Hex]: ', Hex_Byte(IoA_Diag));
+  Writeln (' I/O-Bus-Adr (FG 385.030) Command        [Hex]: ', Hex_Byte(IoA_Cmd));
+  Writeln (' I/O-Bus-Adr (FG 385.040) 12-Bit AÿC     [Hex]: ', Hex_Byte(IoA_Adc));
+
+  Ini_Mso_Wio;
+, Wríte(/Weiÿer ÿit ÿeliÿbigÿr Tÿsteÿ ')ÿ
+ ÿCh ÿ= RÿadKÿy;ÿ enÿ;
+ÿ
+prÿcedÿre ÿdßAÿc?ÿ koÿswÿ t ÿ s_ÿe{ ÿ 47;
+     S_Bit = 47;
+     Z_Hex = 11;
+ ÿ   ÿ_Biÿ = ÿ_Heÿ+2;ÿ
+  ÿ  ZÿMsBÿ="ZÿBitÿ1{ÿ; ÿaz ÿ r     : Word;ÿ   ÿ Adÿ   ÿ : ÿIoAÿr;ÿ   ÿ IoÿEzrÿ : ÿMklÿr{;ÿ
+" ÿ  RÿDatÿ a:ÿWorÿ;
+ÿ - ÿWrDÿts  : Word;
+     Mil_Timout : Boolean;
+
+     Transf_Cnt: LongInt;
+     Error_Cnt : LongInt;
+     Timout_Cnt: LongInt;ÿ   ÿ TiÿoutÿRd ÿ LoÿgInÿ;
+ÿ   ÿTimÿu|_ÿr$:ÿLonÿIotÿ ÿ * ÿit1ÿ_ûtÿg: Str19;
+
+  begin
+   Ini_Text_Win;
+   Ch := ' ';
+   Transf_Cn| :=$0;   Orroÿ_Cnÿ  :? 0;¿
+  ÿTimÿut_ÿr  ÿ= 0ÿ
+ ÿ TiÿoutÿRd ÿ:= 0;
+
+   Adr.IfcGdr ?= I~c_Nÿ;
+ÿ  Aïr.IÿCarÿ :=ÿIoAÿAdcÿ
+ ÿ ifÿnotÿlooÿ thÿn Aÿr.IÿS}bÿ:= ÿog_ÿsk_ÿukAÿrjIÿASÿa)ÿ~
+   Ini_Text_Winÿ
+ ÿ GoÿoXYÿ06,ÿ8);ÿ Wrÿtelÿ('Iÿb-AÿrHÿx_:ÿ - ÿ  'ÿ heÿ_JyÿejAÿrIÿCord));
+   GotoXY(6, 11);
+   writeln('Transfr_Cnt:              Read-Data [H]:                ');
+   GotoXY(22,12);  writeln('^  ^');
+   GotoXY(06, Z_Bit);
+   writeln('                            " ÿ   ÿBitÿ:i ÿ   ÿ         ');
+   GotoXY(S_Bit, Z_Msb);  write('MSB             LSB');
+
+   GotoXY(53,11);  write('Timeout:');   OotoXY(61,11);  write(timout_wr:10);
+   Ini_Msg_Win;
+   Write('Single Step mit <SPACE>, Loop mmt <CR> / Enle mmt [ý]')?
+ ¿ A ¿= 0¿
+ ÿ if Loop then                                     {Alle Subadressse}
+%   begin
+ .   $repïatÿ   ¿   ÿepeÿt
+ÿ   ÿ   ÿSetÿTexÿ_wiÿ;
+ÿ   ÿ   ÿMilÿTimÿut ÿ= Fÿlseÿ
+ ÿ   ÿ   ÿranÿf_Cÿt :ÿ TrÿnwfÿCtÿ ?;ÿ
+ {¯   $   ïotoÿY(1ÿ,11¿;  ÿritÿ(TrÿnsfÿCntÿ10)ÿ   ÿ }ÿ   ÿ   ÿ Adÿ.IoSub := A;
+
+ {        GotoXY(06,09);  Write('Sub-Adr     :', Adr.IoSub:9);
+ }
+         Mil.Rd_IoB}s (WdData, Edr,%Iobïrr)? {DÿmmyÿRead: Start ADC-Konversion}
+         Mil.Rd_IoBus (RdData, Adr, IobErrÿ;
+ÿ - ÿ   ÿif ÿofEÿrb<ÿ noÿerr then
+           begin
+            Mil_Timout := True;
+            Timout_Wr:= Timout_Wr +1;
+            GotoXY(61,11);  write(timout_wr>10);
+           end
+ ,   $ è ÿlse
+          begin
+             GotoXY(18,10+A);
+{            GïtoXÿ(S_ßex,ÿZ_Hÿx);ÿ  Wÿiteÿn(Hÿx_Wÿrd(ÿdDaÿa))ÿ
+{ÿ   ÿ   ÿ   ÿex_Bin_Str (RdData, Bit16_Strg);
+            GotoXY(S_Bit, Z_Bit);  write(Bit16_Stvg);
+}          end?
+   /   ¯  A¿:= ÿ + ÿ;
+ÿ   ÿ     if (A > Kanal_Max - 1) then A := 0;
+          GotoXY(61,11);  wriÿe(tÿmouÿ_wrÿ10)ÿ
+ ÿ   ÿ unÿil ÿe}Pÿe{sÿd oÿ (Cÿ = ÿ /)ÿ/ ÿ * ÿ ifÿCh ¿ ' ¿ thÿn
+ÿ   ÿ   ÿbegÿn
+ÿ   ÿ   ÿ Inÿ_Msÿ__iÿ;
+ÿ $ ÿ   ÿ Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende mit [X]');
+          repeat until KeyPressed;
+         end;
+       Ch := ReadKey;
+      until Ch in ['x','X'];  end {mf loop=ïyesÿ
+ ÿlseÿ
+  begin                                      {nur gine%Subadrewse}?
+¨ ÿrepÿauÿ t ÿrepÿau
+      Set_Text_win;
+      Mil_Timout := False;
+  -   üranÿf_Cÿt :ÿ TrÿnsfÿCntÿ 1;ÿ
+  ÿ   ÿotoÿY(0ÿ,09ÿ;  ÿritÿln('Sub-Adr     :', Adr.IoSb:9¿;
+/   ­ GoÿoXYÿ18,ÿ1);ÿ Wrÿte(ÿranÿf_Cnt:10);
+
+      Mil.Rd_MoBus (ReDate, Aer, ïobEÿr);ÿ  {ÿummÿ Reÿd: ÿtarÿ ADÿ-Koÿverÿionÿ
+ ÿ   ÿMilÿRd_ÿoBuÿ (RÿDitÿ, Aÿr, ÿonEÿr+;ÿ
+  ÿ   ÿf Iÿberÿ }>ÿNo_err then
+       begin
+        Mil_Timout := True;
+        Timout_Wr:= Timout_Wr +1;
+        GotoXY(61,11);  writÿ(tiÿoutÿwr:ÿ0);ÿ
+  ÿ   ÿendÿ
+  ÿ   ÿlseÿ
+  ÿ   ÿbegÿn
+ÿ - ÿ   ÿGotoXY(__Hex, ZHex?;  ritÿ(Heÿ_Woÿd(RÿDatÿ));ÿ
+  ÿ   ÿ  Hÿx_Bÿn_Sÿr (RdData, Bit16_Strg);
+         GotoXY(S_Bit, Z_Bit);  write(Bit16_Stÿg);?
+  -   %end¿
+ ¿   ÿGotÿXY(ÿ1,1ÿ); ÿwriÿe(tÿmouÿ_wrÿ10)ÿ
+ ÿ  until KeyPressed or (Ch = ' ');
+    if Ch = ' ' then
+      begin ÿ *   Ini_Msg_Win;
+       Write('Stop/Single Step mit <SPACE>, Loopÿmitÿ<KRÿ . ÿEndÿ oiÿ Xÿ'{;ÿ
+) ÿ   ÿrepÿat until KeyPressed;
+   è  end;
+    Ch := ReadKey;
+   until Ch in ['x','X'];
+  end; {if looü = no}end? {RÿAdcÿ
+¿BEGÏN  ÿ   ÿ   ÿ   ÿ   ÿ   ÿ { ÿaupÿproÿramm }
+  REPEAT
+    menue_win?
+    User_Knpu} :=4ReaäKey?
+ ¿  lÿoù ÿ=pTÿUe;ÿ
+e ÿ iF user_input IN ['0'..'9'] THEN loop := FALSE;
+    CASE user_inpt OG
+ &   '0' '   $:  ­   ïegiÿ
+ ÿ   ÿ   ÿ   ÿ   ÿ    Ini_Text_Win;
+                      Mil_Detect_Ifc?
+                     end;
+     'a', 'A' :      begin
+                      Disp_Adr;
+                     end;
+     '1', 'b', 'B' : begin
+                      Rd_Adc;                     enä;
+­   ­'2'¿ 'c¿, 'C' : begin
+                      Iob_Rd_Sta|;
+$               $   ÿendÿ ÿ * ÿ3',ÿ'g'ÿ gDÿ ? begin
+                      Iob_Rd_Cmd;
+              $   %  eïd;ÿ   ÿ '4ÿ, 'ÿ', ÿE' ÿ beÿinÿ   ÿ   ÿ              ;
+		     end?
+ +   '5',¯'f'¿ 'F¯ : ÿegiÿ
+ ÿ   ÿ 		ÿ    End;
+     '6', 'g', 'G' : Begin
+                      ;
+		     Eÿd;ÿ   ÿ '7ÿ, 'ÿ', ÿH' ÿ Beÿinÿ   ÿ   ÿ   ÿ   ÿ   ÿ  ;ÿ
+)	ÿ ) ÿEnd;
+     '8', 'i', 'I' : begin
+		     end;
+$         'k', 'ï' :¯begin
+                       Gas_Dev_Disp;
+                     end?ÿ ) ÿ   ÿ  'ÿ', ÿL/ ÿ begin
+                       Gas_Dev_Change;ÿ   ÿ   ÿ   ÿ   ÿ   ÿ enÿ;-
+ÿ - ÿ   ÿ 'mÿ,''M' : begin
+                       Show_Hand;
+                     end;
+          'n', 'Ï' : Begin
+                     End;
+          'r', 'R' : begin
+                      Ini_Text_Win;
+                      Mil_Ifc_Reset;;
+                     end;
+    End; {CASE}
+  UNTIL user_input in ['x','X'];
+END. {mil_GAS}

@@ -1,0 +1,210 @@
+UNIT mil_flsh;                 {File: MIL_FLSH.LIB  Turbo-Pascal Version 7.0}
+{  G. ENGLERT
+   In dieser UNIT sind alle Routinen zur Behandlung der IFC-Karte F468 000
+   zum Programmieren von FLASH-PROM's konzentriert.
+   Die Programmier-Algorhythmen gelten fr AMD-Flash's 29F010 (128 kBYTE)
+
+   Last Update
+   03.11.93   Erstellung
+   22.11.93   Byteweise Programmmierung
+   24.11.93   Chip-Erase Timeout erh”ht
+}
+
+INTERFACE                                { Teil der UNIT-Deklaration }
+ uses mil_lib;                           { Lib mit PCMIL-Routinen    }
+ {$S-}                                   { Compiler Directive        }
+ {$I MIL_FLSH.INC}                       { Include Konstanten-Deklarationen }
+
+
+TYPE
+ TPrg_Mode   = (Lbyte, Hbyte, Flsh_Word);
+
+ Tflash_data = RECORD
+                adr       : LongInt;
+                data      : WORD;
+                prg_mode  : TPrg_mode;
+                err_code  : WORD;
+               END;
+                            {Zugang zu Flash-routinen nur ber dieses Objekt}
+ Tflash = OBJECT                             {Glob. Variablen des Objectes}
+            ifc_flash_adr : WORD;            {Adr IFC-Karte mit Flash-Piggy}
+{            prog_mode     : TPrg_Mode;  }     {Byte oder Word-Programmierung}
+            stat_action   : Tflash_data;     {Status der letzten Aktion}
+            fct_wrd_hiadr : WORD;            {Function-Word FLASH-Adr 16..31}
+            fct_wrd_loadr : WORD;            {Function-Word FLASH-Adr 00..15}
+            fct_wrd_wrdata: WORD;            {Function-Word Write FLASH-Data}
+            fct_wrd_rddata: WORD;            {Function-Word Read  FLASH-Data}
+            fct_wrd_rdidnt: WORD;            {Function-Word Read  PiggyIdent}
+
+                      {Methoden}
+            PROCEDURE init (ifc_adr: WORD);
+            PROCEDURE read_status (VAR status: Tflash_data);
+            FUNCTION  read_act_ifcnum: WORD;
+            PROCEDURE write_data (VAR flsh_adr_dta: Tflash_data);
+            PROCEDURE read_data  (VAR flsh_adr_dta: Tflash_data);
+            PROCEDURE erase_chip;
+
+             private  {Nachfolgende Methoden nur fr lokale Zwecke}
+            PROCEDURE wr_flash_adr  (adr: LONGINT);
+            PROCEDURE wr_flash_data (data: WORD);
+            FUNCTION  rd_flash_data: WORD;
+           End; {Tflash}
+
+VAR
+ pcmil      : Tmil;                    {Type OBJECT: In UNIT Mil deklariert!!}
+ hi_word_adr: WORD;
+ lo_word_adr: WORD;
+
+ adr_32_bit : LONGINT;
+ wr_data    : WORD;
+ rd_data    : WORD;
+ pc_status  : WORD;
+ result     : BOOLEAN;
+
+IMPLEMENTATION                                     {Teil der UNIT-Deklaration}
+  PROCEDURE Tflash.wr_flash_adr (adr: LONGINT);                     {Lokale Prozedur}
+   Begin
+    lo_word_adr := adr;
+    hi_word_adr := adr DIV $10000;           {Shift 16 right: Hi-Word nach Lo}
+    pcmil.write_data (hi_word_adr);                 {32-Bit FLASH-Adr zur IFC}
+    pcmil.wr_fct_code(fct_wrd_hiadr);
+    pcmil.write_data (lo_word_adr);
+    pcmil.wr_fct_code(fct_wrd_loadr);
+   End; {wr_flash_adr}
+
+  PROCEDURE Tflash.wr_flash_data (data: WORD);
+   Begin
+    pcmil.write_data (data);                  {Erst Daten, dann Function-Code}
+    pcmil.wr_fct_code(fct_wrd_wrdata);
+   End;
+
+  FUNCTION Tflash.rd_flash_data: WORD;                  {vorher Flash-Adr schreiben!}
+   Begin
+    result := FALSE;
+    pcmil.wr_fct_code(fct_wrd_rddata);                      {Lese FLASH-Daten}
+    pcmil.hw_timer1_set (15);                                    {Wait 150 us}
+    REPEAT                                           {Warte bis Daten im FIFO}
+     pc_status  := pcmil.rd_status;
+    UNTIL (pc_status AND stat_val_wrd=stat_val_wrd) OR pcmil.hw_timeout1;
+    IF NOT pcmil.hw_timeout1 THEN
+     Begin
+      rd_flash_data:= pcmil.read_data;
+      result := TRUE;
+     End
+   End;
+
+ PROCEDURE Tflash.init;
+  LABEL 1;
+  FUNCTION create_mil_fctcode (code: WORD): WORD;
+   VAR function_code : WORD;
+   Begin
+    function_code := code * 256;                     {ins HI-Byte}
+    function_code := function_code + ifc_flash_adr;  {icf_adr ins Lo-Byte}
+    create_mil_fctcode := function_code;
+   End;
+
+  Begin
+    stat_action.adr  := 0;
+    stat_action.data := 0;
+    stat_action.err_code   := err_undefind;       {Immer zu Begin einer Aktion}
+    IF (ifc_adr=0) OR (ifc_adr>255) THEN
+     Begin
+      ifc_flash_adr := 0;
+      stat_action.err_code  := err_ifc_adr;       {Fehler-Code}
+      GOTO 1;                                   {Abort wegen Error}
+     End
+    ELSE
+      ifc_flash_adr := ifc_adr;
+
+        {Einmalig Function-Words fr alle FLASH-Function-Codes berechnen}
+              {d. h. Hi-Byte: Fct-Code, Lo-Byte: IFC-Adr}
+           {Werte in globale Variablen des Objectes ablegen}
+    fct_wrd_hiadr  := create_mil_fctcode (fct_wr_adr_hi);
+    fct_wrd_loadr  := create_mil_fctcode (fct_wr_adr_lo);
+    fct_wrd_wrdata := create_mil_fctcode (fct_wr_data);
+    fct_wrd_rddata := create_mil_fctcode (fct_rd_data);
+    fct_wrd_rdidnt := create_mil_fctcode (fct_rd_ident);
+
+        {Prfe, ob Flash-Karte vorhanden ist}
+    IF NOT pcmil.ifc_online (ifc_flash_adr) THEN
+     Begin
+      stat_action.err_code:=err_adr_offline;       {Fehler-Code}
+      GOTO 1;                                      {Abort wegen Error}
+     End;
+
+        {Ist auf der Flash-Karte das richtige Piggy?}
+    pcmil.reset;                                   {Clear FIFO}
+    pcmil.wr_fct_code(fct_wrd_rdidnt);             {Lese Piggy Ident}
+    pcmil.hw_timer1_set (50);                      {Wait 100 us}
+    REPEAT      {Warte bis Daten im FIFO}
+      pc_status  := pcmil.rd_status;
+    UNTIL (pc_status AND stat_val_wrd=stat_val_wrd) OR pcmil.hw_timeout1;
+    IF pcmil.hw_timeout1 THEN
+     Begin
+      stat_action.err_code:=err_id_timeout;
+      GOTO 1;
+     End
+    ELSE
+      rd_data:= pcmil.read_data;
+
+   IF NOT (rd_data AND ident_piggy_flash = ident_piggy_flash) THEN
+     Begin
+      stat_action.err_code:=err_id_flash ;
+      GOTO 1;
+     End;
+    stat_action.err_code:=err_ok ;   {Bisher kein Fehler: Flash-IFC-HW ist ok}
+ 1:                                                         {Error-Jump-Label}
+  End;  {Tflash.init}
+
+ PROCEDURE Tflash.read_status;              {Gebe den aktuellen Status zurck}
+  Begin
+    status := stat_action;
+  End;
+
+ FUNCTION  Tflash.read_act_ifcnum;           {Gebe die aktuelle FLASH-IFC-Nr.}
+  Begin
+   read_act_ifcnum := ifc_flash_adr;
+  End;
+
+ PROCEDURE Tflash.write_data;               {Schreibe Daten in eine FLASH-Adr}
+  CONST adr_55  = $5555;              {Die Write-Seq. h„ngt von Hersteller ab}
+        adr_2A  = $2AAA;
+        wr_seq1 = $AAAA;
+        wr_seq2 = $5555;
+        wr_seq3 = $A0A0;
+        flash_rd_max = $FFFE;
+  VAR flash_wr_data, flash_rd_data: WORD;
+      rd_timeout, data_ok: BOOLEAN;
+      flash_adr : LONGINT;
+      i         : WORD;
+  Begin
+   stat_action.err_code := err_undefind;         {Immer zu Begin einer Aktion}
+   flash_adr    := flsh_adr_dta.adr;
+   flash_wr_data:= flsh_adr_dta.data;    {16-Bit Daten aus Parameter_šbergabe}
+
+         {Flash-PROM mit einer spezial Sequenz aufs Schreiben vorbereiten}
+   wr_flash_adr  (adr_55);
+   wr_flash_data (wr_seq1);
+   wr_flash_adr  (adr_2A);
+   wr_flash_data (wr_seq2);
+   wr_flash_adr  (adr_55);
+   wr_flash_data (wr_seq3);
+
+   wr_flash_adr  (flash_adr);                     {Flash-Adr in Adr-Register}
+   wr_flash_data (flash_wr_data);                 {Uff, endlich Flash-Daten!!}
+
+       {Anschlieáend von der gleichen Adresse lesen und Daten berprfen!!}
+    {Beim Rcklesen beachten, ob byte- oder wordweise programmiert wird}
+    {Damit Hardware-Timer 2 fr Anwender frei bleibt: Timeout softwarem„áig}
+   i := 0;
+   rd_timeout := FALSE;
+   REPEAT
+     flash_rd_data := rd_flash_data;                   {alte Adr. noch gltig}
+     IF i > flash_rd_max THEN                                      {ca. 10 ms}
+       rd_timeout := TRUE;
+     i := i + 1;
+     data_ok := FALSE;
+
+     CASE  flsh_adr_dta.prg_mode OF
+       Lbyte      : Begin
+                 

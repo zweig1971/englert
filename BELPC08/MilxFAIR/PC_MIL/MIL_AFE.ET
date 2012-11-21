@@ -1,0 +1,552 @@
+PROGRAM Mil_Afe;
+{ Autor des Basis-Programmes Mil_Base.PAS: G. Englert;      Erstellt 12.04.95
+  Basis-Programm als Grundlage fÅr anwender-spezifische Erweiterungen
+  Achtung: Bei Erweiterungen den Namen des Programmes Ñndern in MIL_xxxx.PAS
+
+
+  énderungs-Protokoll:
+  05.01.99    Et        Erweiterung fÅr Anfordereinheit
+  23.02.00              Wegen MIL-Timeout neu compiliert
+
+
+}
+{$S-}
+uses Crt, WinDos, Dos, Datech, Datech_0, Datech_1;    {spez. MIL-Routinen in Units Datech..}
+
+const
+ Head_Line =
+      'BELAB                                MIL_AFE    ' +
+      '                    [09.10.2000]' +
+      '                            Anfordereinheit F 423.xxx                          ';
+
+ procedure menue_win;
+  var answer: CHAR;
+ begin
+  Ini_Headl_Win;
+  Write(Head_Line);
+  Menue_Base;            {Festliegender Teil des MenÅs: s. a. DATECH_1.PAS}
+  TextColor(Blue);
+
+   {Ab hier kann der Anwender seine MenÅ-Punkte eintragen}
+
+
+  GotoXY(5, 14);
+  Writeln('       [M]<-- Schreibe Zeichen zum Display                                                           ');
+{
+  GotoXY(5, 15);
+  Writeln('       [N]<--                                                            ');
+  GotoXY(5, 16);
+  Writeln('       [O]<--                                                            ');
+  GotoXY(5, 17);
+  Writeln('       [P]<--                                                            ');
+  GotoXY(5, 18);
+  Writeln('       [Q]<--                                                            ');
+  GotoXY(5, 19);
+  Writeln('       [R]<--                                                            ');
+  GotoXY(5, 20);
+  Write  ('       [S]<--                                                            ');
+  GotoXY(5, 21);
+  Write  ('       [T]<--                                                            ');
+  GotoXY(5, 22);
+  Write  ('       [U]<--                                                            ');
+}
+  Ini_Msg_Win;
+  Write('Bitte Auswahl eingeben:                                          EXIT: X-Taste ');
+ end; {menue_win}
+{
+Bisherige Routinen f. alle Anwender gleich! Ab hier spezielle User-Routinen
+}
+ const
+  Disp_Pos_Max= $EF;
+
+  Z_Base      = 6;
+  Z_IfkADr    = Z_Base-1;
+  Z_ModAdr    = Z_Base;
+  Z_ModSubAdr = Z_Base+1;
+  Z_ModId        = Z_Base+2;
+
+  Z_WrPos        = Z_Base+5;
+  Z_String       = Z_WrPos+1;
+  Z_StringHex    = Z_String+2;
+  Z_StringLength = Z_StringHex+1;
+
+  S_Base         = 10;
+  S_ModAdr       = S_Base+16;
+  S_FixIncr      = S_Base+21;
+
+ var
+  ModAdr     : TModAdr;
+  MilErr     : TMilErr;
+  Life_Mode  : TLife_XY;
+
+
+ procedure Afe_WrDisplay;
+  label 99;
+  type TAfe_Strg = string[80];
+  var
+   ModIdent    : TID_Type;
+   IdRet_Code  : TIfk_IdErr;
+   Adr_Error   : Boolean;
+   WrData      : Word;
+   Adress      : Word;
+   User_Input  : Word;
+   Data_Byte   : Byte;
+   Disp_Pos    : Byte;
+   Incr_Pos    : Boolean;
+
+   Disp_Strg   : TAfe_Strg;
+   WrModAdr    : TModAdr;
+   Mod_WrSub   : Byte;
+   User_Int    : Integer;
+   User_Strg   : TAfe_Strg;
+
+{   Bit16_Strg  : Str19;
+   Bit8_Strg   : Str10;
+   WrCard      : TModAdr;
+}
+
+  procedure Set_TastSoft_Win;
+   const Z_Tast_Win = 20;
+         Zeilenzahl = 4;
+   begin
+    Set_Text_Win;
+    TextColor(blue);
+    GotoXY(02,Z_Tast_Win-3); write  ('Belegung der Funktions-Tasten:');
+    Window(02, Z_Tast_Win, 49, Z_Tast_Win+Zeilenzahl);
+    TextBackground(Green);
+    TextColor(Black);
+   end;
+
+ procedure WrDispl (Pos: Byte; Data_Strg: TAfe_Strg);
+  type TDisData = record case Byte of
+                   1: ( lo : Byte; hi : Byte);
+                   2: ( wrd: Word);
+                  end;
+  var
+   WrCard    : TModAdr;
+   MilErr    : TMilErr;
+   Displ_Data: TDisData;
+   N, Str_Length: Byte;
+  begin
+   WrCard.AdrIfc  := Ifc_Test_Nr;    {Modul-Adr definieren}
+   WrCArd.AdrCard := Mod_Test_Nr;
+   WrCard.AdrSub  := Mod_WrSub;        {16-Bit Write Daten auf diese Subadresse}
+   WrCard.AdrMode := AdrNew;
+   Str_Length     := Length (Data_Strg);
+   if Str_Length <> 0 then
+    begin
+      for N:=1 to Str_Length  do
+       begin
+         Displ_Data.lo  := ord(Data_Strg[N]);
+         Displ_Data.hi  := Pos;
+         Mil.Wr_ModBus (Displ_Data.Wrd, WrCard, MilErr);
+         Pos := Pos + 1;
+       end;
+    end;
+  end;  {WrDispl}
+
+
+ procedure Displ_Fill; {mit Ziffern 0..9 fÅllen}
+  var S : string[1];
+      P : Byte;
+      Z : Byte;
+  begin
+    Z := $30;  {Ziffer Null}
+    for P:= 0 to Disp_Pos_Max do    {4 zeilen je 60 Zeichen}
+     begin
+       S[0] := #1;
+       S[1] := chr(Z);
+       WrDispl (P, S);
+       Z := Z + 1;
+       if Z = $3A then Z := $30;
+     end;
+  end; {Displ_Fill}
+
+  procedure Displ_String;
+   var N : Byte;
+   begin
+    Set_Text_Win; TextColor(Black);
+    GotoXY(S_ModAdr,Z_WrPos);        Write (Disp_Pos:3);
+    GotoXY(S_ModAdr,Z_String);       ClrEol;   {Alten String lîschen}
+    GotoXY(S_ModAdr,Z_String);
+    if Length (Disp_Strg) > 40 then
+     begin
+       for N := 1 to 40 do Write (Disp_Strg[N]);   {Zwei Zeilen Text}
+       GotoXY(S_ModAdr,Z_String+1);
+       for N := 41 to Length (Disp_Strg) do Write (Disp_Strg[N]);
+     end
+    else
+     Write (Disp_Strg);  {nur 1 Zeile}
+
+    GotoXY(S_ModAdr,Z_StringHex);    Write (Hex_Byte(ord(Disp_Strg[1])));
+    GotoXY(S_ModAdr,Z_StringLength); Write (Length (Disp_Strg));
+   end;
+
+
+  Begin                {Afe_WrDisplay}
+   Mod_WrSub  := 0;
+   Disp_Strg  := '?';   {ord($3F);}
+   Disp_Pos   := 0;
+   Incr_Pos   := True; {Position incrementieren}
+
+   Life_Mode.PosX    := S_Base-2;
+   Life_Mode.PosY    := Z_String;
+   Life_Mode.Mode    := Norm;      {Parameter fÅr Lebenszeichen definieren}
+   Life_Mode.Time    := Life_Time_Super;
+   Life_Mode.Disp_Win:= Set_Text_Win; {Darstellungs-Fenster}
+
+
+   Ini_Text_Win;
+   {Zuerst prÅfen, ob Åberhaupt eine IFK fÅr den Modulbus vorhanden ist!!}
+   Check_ModBus_Ifk (Ifc_Test_Nr, IdRet_Code);
+   if IdRet_Code <> NoIdErr then
+    begin
+      Adr_Error := True;
+      Ini_Err_Win;
+      case IdRet_Code of
+        MilRd : Write ('Vorsicht: MIL-Lesefehler. IFK vorhanden? Weiter mit <Space>');
+        IfkAdr: Write ('Vorsicht: Falsche IFK-Adr im Identwort!  Weiter mit <Space>');
+        IfkId : Write ('Vorsicht: Keine Modulbus-Ident von IFK!  Weiter mit <Space>');
+      end;
+      Ch := NewReadKey;
+    end;
+
+   ModAdr.AdrIfc  := Ifc_Test_Nr;    {Modul-Adr definieren}
+   ModAdr.AdrCard := Mod_Test_Nr;
+   ModAdr.AdrSub  := ModSub_Adr_ID;  {SubAdr um Ident zu lesen}
+   ModAdr.AdrMode := AdrNew;
+
+   ModIdent.Soll := ModID_32BitIO;
+   ModIdent.Ist  := 0;
+   ModIdent.Mode := Modul;       {nur Modul-Id prÅfen egal welcher Steckplatz}
+
+   if not ID_Check (ModAdr, ModIdent) then         {Ist richtiges Modul da?}
+    begin
+      Adr_Error := True;
+      Ini_Err_Win;
+      Write ('ERROR: I/O-Modul IDENT [Hex] Soll: ', Hex_Byte(ModIdent.Soll),'  Ist: ', Hex_Byte(ModIdent.Ist));
+      Write ('    Weiter mit <Space> ');
+      Ch := NewReadKey;
+    end;
+
+   if Adr_Error then         {bei Fehler: frage User wegen neuer Adr-Eingabe}
+    begin
+     Ini_Msg_Win;
+     Write ('Sollen IFK- u. Modul-Adr neu definiert werden?  <J> oder weiter mit <CR>: ');
+     Ch := NewReadKey;
+     if Ch in ['j','J'] then
+      begin
+       Ask_Ifc_Mod_Adr;
+       ModAdr.AdrIfc  := Ifc_Test_Nr;    {Modul-Adr definieren}
+       ModAdr.AdrCard := Mod_Test_Nr;
+       Ini_Text_Win;
+      end;
+    end;
+
+   Set_Text_Win; TextColor(Blue);
+   GotoXY(30,03); write('AFE-Display beschreiben!');
+   TextColor(Blue);
+   GotoXY(S_Base,Z_IfkAdr);    write('Ifk-Adr  [H]:');
+   GotoXY(S_Base,Z_ModAdr);    write('Modul-Adr[H]:');
+   GotoXY(S_Base,Z_ModSubAdr); write('" Sub-Adr[H]:');
+   GotoXY(S_Base,Z_ModId);     write('Modul-ID [H]:');
+
+   GotoXY(S_ModAdr,Z_ModId);
+   if ModIdent.Soll = ModIdent.Ist then
+     TextColor(Black)
+   else
+     TextColor(Red+128);
+   write (Hex_Byte(ModIdent.Ist));
+
+   Set_Text_Win;
+   TextColor(Black);
+   GotoXY(S_ModAdr,Z_Base-1);    Write(Hex_Byte(ModAdr.AdrIfc));
+   GotoXY(S_ModAdr,Z_ModAdr);    Write(Hex_Byte(ModAdr.AdrCard));
+   GotoXY(S_ModAdr,Z_ModSubAdr); Write(Hex_Byte(Mod_WrSub));
+
+   Set_TastSoft_Win; TextColor(Yellow);
+   GotoXY(01, 01); Write('F1:String [1..80]   F9 :ModulSubAdr ');
+   GotoXY(01, 02); Write('F2:Zeichen  [Hex]   F10:Timeout Info');
+   GotoXY(01, 03); Write('F3:Position 0..239  F11:Fill  Displ ');
+   GotoXY(01, 04); Write('F4:Pos fix/incr     F12:Clear Displ ');
+
+   Set_Text_Win; TextColor(Blue);
+   GotoXY(S_Base,    Z_WrPos);            Write ('Write Position: ');
+   GotoXY(S_Base,    Z_String);           Write ('String [Ascii]: ');
+   GotoXY(S_Base,    Z_StringHex);        Write ('1.Zeichen[Hex]: ');
+   GotoXY(S_Base,    Z_StringLength);     Write ('Anzahl Zeichen: ');
+   TextColor(Black);
+   GotoXY(S_FixIncr, Z_WrPos);
+   if Incr_Pos then Write('Incr') else Write('Fix ');
+
+   Displ_String;
+   Cursor(False);
+   Std_Msg;
+   Ch := NewReadKey;
+
+    repeat
+     if Ch = ' ' then
+      begin
+       Std_Msg;
+       Single_Step := True;
+       if Incr_Pos then
+        begin
+         Disp_Pos := Disp_Pos + 1;
+         if Disp_Pos > Disp_Pos_Max then Disp_Pos := 0;
+        end;
+       Set_Text_Win;
+       GotoXY(S_ModAdr,Z_WrPos); Write (Disp_Pos:3);
+       WrDispl (Disp_Pos, Disp_Strg);
+       Life_Sign_XY (Life_Mode);
+       repeat until KeyEPressed;
+       Ch := NewReadKey;
+      end;
+
+     if Ch = #13 then Single_Step := False;
+
+     if not Single_Step then
+      begin
+       Set_Text_win;
+       if Incr_Pos then
+        begin
+         Disp_Pos := Disp_Pos + 1;
+         if Disp_Pos > Disp_Pos_Max then Disp_Pos := 0;
+        end;
+       Set_Text_Win;
+       GotoXY(S_ModAdr,Z_WrPos); Write (Disp_Pos:3);
+       WrDispl (Disp_Pos, Disp_Strg);
+       Life_Sign_XY (Life_Mode);
+      end;
+
+     if Ch = #0 then
+      begin
+       Ch := NewReadKey;
+       case ord (Ch) of
+        Taste_F1 : begin     {Input String}
+                     User_Strg := '';   {Clear}
+                     Ini_Msg_Win;
+                     Write('max. 80 Zeichen: ');
+                     Readln (User_Strg);
+                     if Length(User_Strg) <> 0 then
+                      begin
+                       Disp_Strg := User_Strg;
+                       Displ_String;
+                      end;
+                     Std_Msg;
+                   end;
+        Taste_F2 : begin     {Input Position}
+                     if Ask_Hex_Break (User_Input,Byt)  then
+                      begin
+                       Disp_Strg := chr(Lo(User_Input));
+                       Displ_String;
+                      end;
+                     Std_Msg;
+                   end;
+        Taste_F3 : begin     {Input Position}
+                     if Read_Int (0,Disp_Pos_Max, User_Int) then
+                      begin
+                       Disp_Pos:= abs(User_Int);
+                       GotoXY(S_ModAdr,Z_WrPos); Write (Disp_Pos:3);
+                      end;
+                     Std_Msg;
+                   end;
+        Taste_F4 : begin     {Position fix oder increment}
+                     if Incr_Pos then Incr_Pos:= False else Incr_Pos := True;
+                     Set_Text_Win;
+                     GotoXY(S_FixIncr, Z_WrPos);
+                     if Incr_Pos then Write('Incr') else Write('Fix ');
+                   end;
+        Taste_F9 : begin     {neue Modul SubAdresse}
+                    if Ask_Hex_Break (User_Input,Byt)  then
+                     begin
+                      Mod_WrSub:= Lo(User_Input);
+                      Set_Text_Win;
+                      GotoXY(S_ModAdr,Z_ModSubAdr);
+                      Write(Hex_Byte(Mod_WrSub));
+                     end;
+                    Std_Msg;
+                   end;
+        Taste_F10: begin  {Welcome Message}
+                     User_Strg := chr(0);
+                     WrDispl ($FF, User_Strg);
+                     User_Strg := 'TIMEOUT !!';
+                     WrDispl (55, User_Strg);
+ User_Strg := 'Die Strahl Anforder-Einheit hat seit 10 min keine Verbindung zur Pulszentrale';
+                     WrDispl (120, User_Strg);
+
+                    end;
+        Taste_F11: begin     {Ganzes Display beschreiben, langsam}
+                     Life_Sign_XY (Life_Mode);
+                     Displ_Fill;
+                     Life_Sign_XY (Life_Mode);
+                   end; {F-Taste}
+        Taste_F12: begin     {Clear Display}
+                    User_Strg := chr(0);   {'=';}
+                    WrDispl ($FF, User_Strg);
+                    Life_Sign_XY (Life_Mode);
+                    Disp_Pos := 0;
+                    Set_Text_Win;
+                    GotoXY(S_ModAdr,Z_WrPos); Write (Disp_Pos:3);
+                   end; {F-Taste}
+       end;  {Case}
+     end;
+    if KeyEPressed then Ch := NewReadKey;
+   until Ch in ['x','X'];
+  99:  Cursor(True);
+ end; {Afe_WrDisplay}
+
+
+begin                      { Hauptprogramm }
+  Ifc_Test_Nr := 0;
+  Mod_Test_Nr := 0;
+  repeat
+    Menue_Win;
+    User_Input  := NewReadKey;
+    Single_Step := True;
+    case User_Input of
+     '0'      : Mil_Detect_Ifc;
+     '1'      : Mil_Detect_Ifc_Compare;
+     '2'      : begin
+		  Mil_Ask_Ifc;
+                  Mil_Rd_HS_Ctrl (Ifc_Test_Nr);
+                end;
+     '3'      : begin
+		{  Mil_Ask_Ifc;                    }
+                {  Mil_Rd_HS_Status (Ifc_Test_Nr); }
+                end;
+     '4'      : begin
+		  Mil_Ask_Ifc;
+                  Mil_Stat_All (Ifc_Test_Nr);
+                end;
+     '5'      : begin
+                  Convert_Hex_Volt;
+                end;
+     '6'      : begin
+                  Int_Mask;
+                end;
+     '7'      : begin
+		{  Mil_Ask_Ifc;
+                  Mil_HS_Stat_Cmd (Ifc_Test_Nr); }
+                end;
+     '9'      : begin
+		  Mil_Ask_Ifc ;
+                  Mil_Echo (Ifc_Test_Nr);
+                end;
+     'a', 'A' :  Mil_Ask_Ifc;
+     'b', 'B' : begin
+		 Mil_Ask_Ifc;
+                 Mil_Rd_Ifc_Stat (Ifc_Test_Nr);
+                end;
+     'c', 'C' : begin
+                  Mil_Rd_Status;
+                end;
+     'd', 'D' : begin
+                  Mil_Rd_Fifo;
+                end;
+     'e', 'E' : begin
+		  Mil_Ask_Ifc;
+                  Mil_Rd_Data;
+		end;
+     'f', 'F' : begin
+                  Functioncode_Table;
+                end;
+     'g', 'G' : begin
+		  Mil_Ask_Ifc;
+                  if Ask_Data_Break (Mil_Data) then Mil_WrData (Mil_Data);
+                end;
+     'h', 'H' : begin
+		  Mil_Ask_Ifc;
+		  Mil_Wr_Fctcode;
+                end;
+     'i', 'I' : begin
+		  Mil_Ask_Ifc;
+                  Mil_Data := 0;
+                  Mil_Wr (Mil_Data);
+                end;
+     'j', 'J' : begin
+		  Mil_Ask_Ifc;
+                  if Ask_Data_Break (Mil_Data) then Mil_Wr_Rd (Mil_Data);
+                end;
+     'k', 'K' : begin
+		  Mil_Ask_Ifc;
+		  Mil_Loop;
+                end;
+     'l', 'L' : begin
+                  Mil_Dual_Mode;
+                end;
+     'y', 'Y' : begin
+                  Modul_Bus;
+                end;
+     'z', 'Z' : begin
+                  Telefon;
+                end;
+     {Ab hier User-Erweiterungen!!}
+          'm', 'M' : begin
+                      if (Ifc_Test_Nr=0) or (Mod_Test_Nr=0) then Ask_Ifc_Mod_Adr;
+                       Afe_WrDisplay;
+                     end;
+          'n', 'N' : begin
+                     end;
+          'o', 'O' : begin
+                     end;
+          'p', 'P' : begin
+                     end;
+          'q', 'Q' : begin
+                     end;
+          'r', 'R' : begin
+                     end;
+          'S', 'S' : begin
+                     end;
+          't', 'T' : begin
+                     end;
+          'u', 'U' : begin
+                     end;
+    end; {CASE}
+  until user_input in ['x','X'];
+  Window(1, 1, 80, 25);
+  TextBackground(Black);
+  ClrScr;
+end. {mil_base}
+
+
+                     {Software-Gerippe fÅr Single-Step und Loop}
+    Cursor(False);
+    Std_Msg;
+    Ch := NewReadKey;
+
+    repeat
+     if Ch = ' ' then
+      begin
+       Std_Msg;
+       Single_Step := True;
+       {User Action }
+       repeat until KeyEPressed;
+       Ch := NewReadKey;
+      end;
+
+     if Ch = #13 then Single_Step := False;
+
+     if not Single_Step then
+      begin
+       {User Action}
+      end;
+
+     if Ch = #0 then                  {Sonder-Tasten Abfrage}
+      begin
+       Ch := NewReadKey;
+       case ord (Ch) of
+        Taste_F1 : begin
+                   end;
+        Taste_F12: begin
+                   end;
+        Taste_Pfeil_Links : begin
+                            end;
+        Taste_Pfeil_Rechts: begin
+                            end;
+      end;  {Case}
+     end;
+    if KeyEPressed then Ch := NewReadKey;
+   until Ch in ['x','X'];
+ 99:  Cursor(True);
+
+

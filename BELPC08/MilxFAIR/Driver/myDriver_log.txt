@@ -1,0 +1,2 @@
+ZWrite to Register Reset_Card Value: 0x1
+Read from Register Mil_Status Value: 0xe0060001

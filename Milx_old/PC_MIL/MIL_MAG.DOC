@@ -1,0 +1,3116 @@
+PROGRAM Mil_Mag;
+{ Autor des Basis-Programmes Mil_Base.Pas: G. Englert;      Erstellt 12.04.95
+  Basis-Programm als Grundlage fÅr anwender-spezifische Erweiterungen
+  Achtung: Bei Erweiterungen den Namen des Programmes Ñndern in MIL_xxxx.PAS
+
+  Autor der Erweiterungen   :
+  énderungen:
+  23.06.95    Englert   Funktionscode-Tabelle
+  29.06.95    Englert   Statusbits fÅr C0, C1, C2, C3
+  13.07.95    Et        neue Functions-Code-Tabelle
+  23.08.95    Et        Statusbits-Tabellen
+  15.09.95    Et        Wegen zu gro·em Codesegment (ca. 64k) einige Proceduren
+                        in die DATECH.PAS ausgelagert
+                        z. B. Displ_PC_Stat; Displ_HS_Status; Displ_HS_Ctrl;
+  21.09.95    Et        Status-Tabs erweitert: in DATECH.PAS
+  06.10.95    Et        Statuslesen C0-C2 mit Timeout-Anzeige
+  30.11.95    Et        MIL-Detect-Compare: Anzeige korrigiert
+  08.12.95    Et        Anzeige Interrupt-Maske
+  11.01.95    Et        procedure Mil-Loop Fifo leeren eingebaut
+  04.02.96    Et        Status-Tabelle [5] erweitert
+  14.02.96              ZusÑtzliche Unit: DATECH_1
+  10.04.96              Hallsonden-Eichung mit variabler Tabelle
+  02.05.96              MenÅpunkt P neu
+  12.07.96              Punkt M: F10 Adr-Auswahl erweitert
+  16.07.96              Punkt O: 1:1 Puls 10 V und 0 Volt
+}
+{$S-}
+uses Crt, WinDos, Datech, Datech_1;
+
+CONST
+ head_line =
+      'Datentechnik                         MIL_MAG    ' +
+      '                    [17.07.1996]' +
+      '                                  Magnetservice             (Turbo Pascal V7.0)';
+
+procedure menue_win;
+VAR answer: CHAR;
+begin
+  Ini_Headl_Win;
+  Write(head_line);
+  Menue_Base;              {Festliegender Teil des MenÅs: s. a. DATECH_1.PAS}
+
+  {Ab hier kann der Anwender seine MenÅ-Punkte eintragen}
+  GotoXY(5, 16);
+  Writeln('       [M]<-- Inbetriebnahme u. Status-Tabellen                          ');
+  GotoXY(5, 17);
+  Writeln('       [N]<-- Sende Sollwert (nach Tabelle, Incr oder Shift)             ');
+  GotoXY(5, 18);
+  Writeln('       [O]<-- Test fÅr gepulste NetzgerÑte (SOLL, IST, ZEIT: fix     )   ');
+  GotoXY(5, 19);
+  Writeln('       [P]<-- Test fÅr gepulste NetzgerÑte (SOLL, IST, ZEIT: variabel)   ');
+  GotoXY(5, 20);
+  Writeln('       [Q]<-- Test fÅr gerampte NetzgerÑte (0...+10V oder 0...-10V)      ');
+  GotoXY(5, 21);
+  Writeln('       [R]<--                                                            ');
+  GotoXY(5, 22);
+  Writeln('       [S]<-- Hallsonden Eichung (variable Tabelle, iterativ bzw. Rampe) ');
+  GotoXY(5, 23);
+  Writeln('           [T]<-- Hallsonden Eichung (fixe Tabelle, sprunghaft)                     ');
+  ini_msg_win;
+  Write('Bitte Auswahl eingeben:                                          EXIT: X-Taste ');
+ End; {menue_win}
+
+
+{xxx}  {Ab hier sollten User-Routinen beginnen!!}
+  procedure Ini_IstwMag_Win;
+   begin
+    Window(43, 13, 79, 17);
+    TextBackground(Cyan);
+    TextColor(Black);               {Setze Schriftfarbe}
+    ClrScr;
+   end;
+
+  procedure Set_IstwMag_Win;
+   begin
+    Window(43, 13, 79, 17);
+    TextBackground(Cyan);
+    TextColor(Black);               {Setze Schriftfarbe}
+   end;
+
+  procedure Ini_TastMag_Win;
+   begin
+    Window(43, 18, 79, 20);
+    TextBackground(Green);
+    TextColor(Black);               {Setze Schriftfarbe}
+    ClrScr;
+   end;
+
+  procedure Set_TastMag_Win;
+   begin
+    Window(43, 18, 79, 20);
+    TextBackground(Green);
+    TextColor(Black);               {Setze Schriftfarbe}
+   end;
+
+ PROCEDURE Displ_FTasten;
+  Begin
+     {Info-Anzeige der Bit-Belegung Funktionstasten}
+      ini_info_win;
+      writeln('F1  : Reset                   ');
+      writeln('F2  : Ein                     ');
+      writeln('F3  : Aus                     ');
+      writeln('F4  : +                       ');
+      writeln('F5  : -                       ');
+      writeln('F6  : Last  0...5             ');
+      writeln('F7  : Sollwert +2,5 Volt      ');
+      writeln('F8  : Sollwert  0   Volt      ');
+      writeln('F9  : Sollwert -2,5 Volt      ');
+      writeln('F10 : IFK-Adresse Ñndern      ');
+      writeln('F11 : Abfrage-Rate Fast/Slow  ');
+      write  ('F12 : Init FehlerÅberwachung  ');
+   End; {displ_HS_Status}
+
+ function Get_LastNr (var Num: Byte): Boolean;
+  begin
+     Get_LastNr := FALSE;
+     begin
+      Ini_Text_Win;
+      Ini_Msg_Win;
+      Write ('Bitte Last-Nummer als Dezimalzahl [0..5] eingeben:');
+      Readln (Num);
+      IF Num IN [0..5] THEN Get_LastNr := TRUE;
+     end;
+  end; {Get_LastNr}
+
+procedure Mil_NG_Puls_Vari;     {Variable Eingabe fÅr Sollwert, Istwert, Zeit}
+{ Drei Magnetsollwerte und Istwerte sollen in definierten AbstÑnden gesetzt/
+  gelesen werden. Abweichungen Soll-Ist soll ermittelt und max. 10 Vergleiche
+  angezeigt werden.
+}
+ label 99;
+ const Hist_Max = 9;
+       Top_Max  = 3;
+       Z_Start  = 1;
+
+ type
+  TSollIst = record
+              Soll     : Word;       {Sollwert}
+              Ist      : Word;       {Istwert}
+              S_I_Diff : Word;
+              Rd_Error : Boolean;    {Zeigt Fehler beim Istwertlesen an}
+              Zeit_Top : Word;       {Dauer des Flattop}
+              Zeit_Wait: Word;       {Warte, bis Istwert gelesen werden kann}
+              Hist_Diff: array [0..Hist_Max] of Word; {Historische Differenzen}
+             end;
+ var
+  FlaTop : array [1..Top_Max] of TSollIst;
+  Wr_Fct_Code, Rd_Fct_Code : Byte;
+  MilErr : TMilErr;
+  Fct    : TFct;
+  RetAdr : Byte;
+  OnlineErr: TOnlineErr;
+  Status_Data: Word;
+  Hist_Index : Byte;         {gilt fÅr Array mit den historischen Differenzen}
+  Z : Byte;
+
+  procedure New_Ifc_Adr;
+   VAR answer : CHAR;
+   Begin
+     status := FALSE;
+     WHILE NOT status DO
+      Begin
+       Ifc_Test_Nr := Ask_Hex_Byte;
+       IF ifc_test_nr IN [1..255] THEN status := TRUE;
+      End;
+   End; {ask_ifc}
+
+  procedure Mag_Headline;
+   begin
+    Ini_Headl_Win;
+    GotoXY(01,01);
+    write('                            Test fÅr gepulste Magnete                           ');
+    GotoXY(01,02);
+    write('Schreibe in definierten AbstÑnden 3 Sollwerte u. lese Istwerte verzîgert zurÅck');
+    ini_text_win;
+    Ini_Msg_Win;
+    Write ('Weiter mit <Space>    oder    E[X]it ');
+    Set_Text_Win;
+   end;
+
+  procedure Ini_Flatop_Ary;
+   var y,z : Byte;
+   begin
+    for y := 1 to Top_Max do
+     begin
+      Flatop[y].Soll     := 0;
+      Flatop[y].Ist      := 0;
+      Flatop[y].S_I_Diff := 0;
+      Flatop[y].Rd_Error := False;
+      Flatop[y].Zeit_Top := 0;
+      Flatop[y].Zeit_Wait:= 0;
+      for z:=0 to Hist_Max do Flatop[y].Hist_Diff[z] := 0;
+     end; {for y}
+   end; {Ini_Flatop_Ary}
+
+  function Ask_Flatop (Num: Byte): Boolean;   {Erfrage Parameter von User}
+   label 01;
+   const Z_Start = 15;
+   var Soll      : Word;
+       Top, Wait : Byte;
+   begin
+     Ask_Flatop := True;
+     Soll := Flatop[Num].Soll;                 {Rette alte Werte fÅr Abbruch}
+     Top  := Flatop[Num].Zeit_Top;
+     Wait := Flatop[Num].Zeit_Wait;
+
+    repeat
+      Ini_Text_Win;
+      GotoXY(20,04); write(' Bitte Flat-Top Parameter eingeben!!');
+      GotoXY(5,Z_Start);
+      write ('Flat-Top Nummer         :      ', Num); ClrEol;
+
+      GotoXY(5, 22);
+      write ('Welchen Sollwert f. Flat-Top ', Num,' ?'); Clreol;
+      Flatop[Num].Soll := Rd_Real_Sw (10.0);
+      Set_Text_Win;
+      GotoXY(5,Z_Start+1);
+      write ('Flat-Top-Sollwert [Volt]:');
+      Write_Real_10V_Bipol (Flatop[Num].Soll); ClrEol;
+
+      Flatop[Num].Zeit_Top := 0;    {Default}
+      repeat
+        Set_Text_Win;
+        GotoXY(1, 22); Clreol;
+        Ini_Msg_Win;
+        write ('Welche Dauer (max. 65 sec) fÅr FLAT-TOP ', Num, ' [ms] ?: ');
+        {$I-}               {Fehleingabe zulassen: Compiler-Check ausschalten}
+        readln (Flatop[Num].Zeit_Top);
+        {$I+}
+        if (IoResult <> 0) then
+          Flatop[Num].Zeit_Top := 0    {Fehler}
+        else
+         begin
+          if Flatop[Num].Zeit_Top = 0 then
+           begin
+             Ini_Err_Win;
+             write ('Dauer fÅr FLAT-TOP mu· <> 0 sein!  Weiter mit beliebiger Taste');
+             repeat until KeyEPressed;
+           end;
+         end;
+      until  Flatop[Num].Zeit_Top > 0;
+
+      Set_Text_Win;
+      GotoXY(5,Z_Start+2);
+      write ('Flat-Top-Dauer      [ms]:  ');
+      write (Flatop[Num].Zeit_Top:5); ClrEol;
+
+
+      Flatop[Num].Zeit_Wait := Flatop[Num].Zeit_Top + 1; {Als Fehler setzen}
+      repeat
+        Set_Text_Win;
+        GotoXY(1, 22); Clreol;
+        Ini_Msg_Win;
+        write ('Wartezeit (max. 65 sec): Beginn Flat-Top bis Lesen Istwert ', Num, ' [ms] ? ');
+
+        {$I-}               {Fehleingabe zulassen: Compiler-Check ausschalten}
+        readln  (Flatop[Num].Zeit_Wait);
+        {$I+}
+        if (IoResult <> 0) then  {Fehler}
+         begin
+           Ini_Err_Win;
+           write ('Eingabe-Fehler !!       Weiter mit beliebiger Taste ');
+           repeat until KeyEPressed;
+         end
+        else
+         begin
+           Set_Text_Win;
+           GotoXY(5,Z_Start+3);
+           write ('Istwert lesen nach  [ms]:  ');
+           write (Flatop[Num].Zeit_Wait:5); ClrEol;
+
+           if Flatop[Num].Zeit_Wait > Flatop[Num].Zeit_Top then
+            begin
+              Ini_Err_Win;
+              write ('Wartezeit grî·er als Flat-Top-Zeit!! Weiter mit beliebiger Taste ');
+              repeat until KeyEPressed;
+            end;
+         end;
+      until  Flatop[Num].Zeit_Wait <= Flatop[Num].Zeit_Top;
+
+      Ini_Msg_Win;
+      write ('Bisherige Eingaben akzeptieren [J/N] oder Abbruch [X]: ');
+      repeat until KeyEPressed;
+      Ch := NewReadKey;
+    until (Ch in ['x','X']) or (Ch in ['j','J']);
+
+    if Ch in ['x','X'] then
+     begin                                          {Abbruch!}
+      Ask_Flatop           := False;
+      Flatop[Num].Soll     := Soll;             {Alte Werte restaurieren}
+      Flatop[Num].Zeit_Top := Top;
+      Flatop[Num].Zeit_Wait:= Wait;
+     end;
+   end;
+
+  procedure Ini_Flat_Win;
+    var Index : Byte;
+    begin
+     Ini_Text_Win;
+     TextColor(Brown);               {Setze Schriftfarbe}
+     GotoXY(01, Z_Start);
+     Write ('Test_Count:            Status:      IFC-Adr[H]:     Wr-Fct[H]:     Rd-Fct[H]:   ');
+     GotoXY(01, Z_Start+1);
+     Write ('Aktives Flat-Top:      R/H   :      DataSet-Nr:                                  ');
+     TextColor(Brown);               {Setze Schriftfarbe}
+
+     GotoXY(01, Z_Start+3);
+     Write ('Flatop Dauer  +Read    -- Sollwert --      Istwert         Diff. Soll-Ist       ');
+     GotoXY(01, Z_Start+4);
+     Write ('  Nr   [ms]    [ms]   [Volt]    [Hex]      [Volt]              [Volt]           ');
+     TextColor(Black);               {Setze Schriftfarbe}
+
+     GotoXY(01, Z_Start+5);
+     Write ('  00                                                                            ');
+     GotoXY(01, Z_Start+6);
+     Write ('  01                                                                            ');
+     GotoXY(01, Z_Start+7);
+     Write ('  02                                                                            ');
+     GotoXY(01, Z_Start+8);
+     Write ('  03                                                                            ');
+
+     TextColor(Brown);               {Setze Schriftfarbe}
+     GotoXY(01, Z_Start+9);
+     Write ('v-- Anzeige der letzten 10  Soll-Ist Differenz-Werte (N-1 = vorletzter Wert) --v');
+     GotoXY(20, Z_Start+10); Write ('Diff- Flatop 1');
+     GotoXY(41, Z_Start+10); Write ('Diff- Flatop 2');
+     GotoXY(61, Z_Start+10); Write ('Diff- Flatop 3');
+
+     for Index := 0 to Hist_Max do
+      begin
+        GotoXY(02, Z_Start+11+Index);
+        Write ('N -',Index:2);
+      end;
+     TextColor(Black);               {Setze Schriftfarbe}
+   end;
+
+  procedure Disp_Flat_Active (Num : Byte);  {Aktives Flattop auf Bildschirm}
+   var x : Byte;
+   begin
+     GotoXY(20, Z_Start+1); Write (Num);    {aktives Flattop}
+     for x := 0 to 3 do                     {lîsche Zeiger}
+      begin
+        GotoXY(01, Z_Start+5+x);
+        Write ('  ');
+      end;
+
+     case Num of
+       0 : begin   GotoXY(01, Z_Start+5);  Write ('->');  end;
+       1 : begin   GotoXY(01, Z_Start+6);  Write ('->');  end;
+       2 : begin   GotoXY(01, Z_Start+7);  Write ('->');  end;
+       3 : begin   GotoXY(01, Z_Start+8);  Write ('->');  end;
+     end;
+   end;
+
+  function Flat_Top (Num: Byte): Boolean;
+  { Die Dauer des Flattops und die Leseverzîgerung des Istwertes sollen Åber
+    den Timer2 bestimmmt werden, da Timer1 fÅr MIL-Operationen reserviert ist.
+    Zuerst wird Timer2 mit der Istwert-Verzîgerung geladen und dann mit
+    der restlichen Zeit als Differenz: Flattop-Time minus Leseverzîgerung
+  }
+   var Top_Minus_Wait_Time : LongInt;
+       Read_Time_10us      : LongInt;
+       Soll_Ist_Diff       : Word;
+   begin
+    Flat_Top := False;         {Default}
+    Disp_Flat_Active (Num);
+    Top_Minus_Wait_Time:= Flatop[Num].Zeit_Top - Flatop[Num].Zeit_Wait; {ms!!}
+    Top_Minus_Wait_Time:= Top_Minus_Wait_Time * 100;      {10 us * 100 = 1 ms}
+    Read_Time_10us     := Flatop[Num].Zeit_Wait * 100;    {10 us * 100 = 1 ms}
+    Fct.B.Adr := Ifc_Test_Nr;
+    Fct.B.Fct := Wr_Fct_Code;
+    Mil.Wr (Flatop[Num].Soll , Fct, MilErr);  {Setze Flattop Sollwert}
+
+    Mil.Timer2_Wait(Read_Time_10us);          {Read-Time abwarten; Basis 10 us}
+    Mil.Timer2_Set(Top_Minus_Wait_Time);      {Lade Ende des Flattops}
+    Fct.B.Adr := Ifc_Test_Nr;
+    Fct.B.Fct := Rd_Fct_Code;
+    Mil.Rd ( Flatop[Num].Ist, Fct, MilErr);   {Lese Istwert}
+    GotoXY(43, Z_Start+5+Num);                {Display-Position Istwert}
+    if MilErr <> No_Err then
+     begin
+      Write ('  Rd_Err  ');
+      Flatop[Num].Rd_Error := True;
+      GotoXY(63, Z_Start+5+Num); Write('          ');
+     end
+    else
+     begin
+      Write_Real_10V_Bipol (Flatop[Num].Ist);
+      Flatop[Num].Rd_Error := False;
+      Flatop[Num].S_I_Diff := Flatop[Num].Soll - Flatop[Num].Ist;
+      Flatop[Num].Hist_Diff[Hist_Index] := Flatop[Num].S_I_Diff;
+      GotoXY(63, Z_Start+5+Num); Write_Real_10V_Bipol (Flatop[Num].S_I_Diff);
+     end;
+
+    repeat until Mil.Timeout2;   {Warte bis zum Ende des Flattops}
+   end; {Flat_Top}
+
+  procedure Flat_Zero;
+   begin
+    Fct.B.Adr := Ifc_Test_Nr;
+    Fct.B.Fct := Wr_Fct_Code;
+    Mil.Wr (0 , Fct, MilErr);  {Setze Flattop Sollwert}
+    Disp_Flat_Active (0);
+   end;
+
+
+{Anzeige der alten Differenzwerte: falls nur eine Messung gemacht wurde, auch
+nur eine Zeile anzeigen. Erst nach Hist_Max Messungen, werden alle historischen
+Werte angezeigt}
+ procedure Disp_Hist_Ary (Test_Count: Word);
+   var Index       : Byte;
+       Start_Index : Byte;
+       Flat_Nr : Byte;
+       Rd_Index  : Integer;
+       DispLn_Num: Word;
+
+   begin
+     Set_Text_Win;
+     Flat_Nr   := 1;
+     if Test_Count > Hist_Max then DispLn_Num := Hist_Max
+     else DispLn_Num := Test_Count - 1;          {Wenig Daten, wenig anzeigen}
+
+     for Index := 0 to DispLn_Num do
+     begin
+       Rd_Index := (Hist_Index - Index) - 1;  {Hist_index zeigt auf next write}
+       if Rd_Index < 0 then Rd_Index := Hist_Max + 1 + Rd_Index;
+       GotoXY(22, Z_Start+11+Index);
+       if Flatop[Flat_Nr].Rd_Error then
+        Write ('Rd_Err')
+       else
+         Write_Real_10V_Bipol (Flatop[Flat_Nr].Hist_Diff[Rd_Index]);
+      end;
+
+     Flat_Nr   := 2;
+     if Test_Count > Hist_Max then DispLn_Num := Hist_Max
+     else DispLn_Num := Test_Count - 1;          {Wenig Daten, wenig anzeigen}
+
+     for Index := 0 to DispLn_Num do
+     begin
+       Rd_Index := (Hist_Index - Index) - 1;  {Hist_index zeigt auf next write}
+       if Rd_Index < 0 then Rd_Index := Hist_Max + 1 + Rd_Index;
+       GotoXY(43, Z_Start+11+Index);
+       if Flatop[Flat_Nr].Rd_Error then
+        Write ('Rd_Err')
+       else
+         Write_Real_10V_Bipol (Flatop[Flat_Nr].Hist_Diff[Rd_Index]);
+      end;
+
+     Flat_Nr   := 3;
+     if Test_Count > Hist_Max then DispLn_Num := Hist_Max
+     else DispLn_Num := Test_Count - 1;          {Wenig Daten, wenig anzeigen}
+
+     for Index := 0 to DispLn_Num do
+     begin
+       Rd_Index := (Hist_Index - Index) - 1;  {Hist_index zeigt auf next write}
+       if Rd_Index < 0 then Rd_Index := Hist_Max + 1 + Rd_Index;
+       GotoXY(63, Z_Start+11+Index);
+       if Flatop[Flat_Nr].Rd_Error then
+        Write ('Rd_Err')
+       else
+         Write_Real_10V_Bipol (Flatop[Flat_Nr].Hist_Diff[Rd_Index]);
+      end;
+   end; {Disp_Hist_Ary}
+
+ procedure Clear_Hist_Disp;
+  var Index : Byte;
+   begin
+     Set_Text_Win;
+     for Index := 0 to Hist_Max  do
+      begin
+        GotoXY(01, Z_Start+11+Index); ClrEol;
+      end;
+
+     TextColor(Brown);               {Setze Schriftfarbe}
+     for Index := 0 to Hist_Max  do
+      begin
+        GotoXY(02, Z_Start+11+Index);
+        Write ('N -',Index:2);
+      end;
+     TextColor(Black);               {Setze Schriftfarbe}
+   end;
+
+ procedure Disp_R_H;
+  begin
+   Fct.B.Adr := Ifc_Test_Nr;
+   Fct.B.Fct := Fct_Rd_Stat0;               {Status C0}
+   Mil.Rd (Status_Data, Fct, MilErr);
+   GotoXY(32, Z_Start);
+   if BitTst (Status_Data, 8) then          {Bit 8 gibt Ein/Aus an}
+     Write ('Ein')
+   else
+     Write ('Aus');
+
+   Fct.B.Fct := Fct_Rd_Stat2;               {Status C2}
+   Mil.Rd (Status_Data, Fct, MilErr);
+   GotoXY(32, Z_Start+1);
+   if BitTst (Status_Data, 8) then          {Bit 8 gibt R/H an}
+     Write ('R')
+   else
+     Write ('H');
+  end;
+
+ begin                        {Mil_NG_Puls}
+   Mil_Ask_Ifc;
+   Fct.B.Adr := Ifc_Test_Nr;
+   Hist_Index := 0;
+   Transf_Cnt := 0;
+   Ini_Flatop_Ary;
+   Mag_Headline;
+   Ini_Text_Win;
+
+   GotoXY(5, 22);
+   write ('Welchen Write-Function-Code fÅr Sollwert ??');
+   Wr_Fct_Code := ask_hex_byte;
+   Ini_Text_Win;
+
+   GotoXY(5, 22);
+   write ('Welchen Read-Function-Code fÅr Istwert ??');
+   Rd_Fct_Code := ask_hex_byte;
+
+   if not Ask_Flatop (1) then goto 99;
+   if not Ask_Flatop (2) then goto 99;
+   if not Ask_Flatop (3) then goto 99;
+
+   Ini_Flat_Win;
+   GotoXY(49, Z_Start+0); Write (Hex_Byte(Ifc_Test_Nr));
+   GotoXY(64, Z_Start+0); Write (Hex_Byte(Wr_Fct_Code));
+   GotoXY(79, Z_Start+0); Write (Hex_Byte(Rd_Fct_Code));
+
+   GotoXY(22, Z_Start+5); Write_Real_10V_Bipol (0);
+   GotoXY(33, Z_Start+5); Write (Hex_Word (0));
+
+   GotoXY(07, Z_Start+6); Write (Flatop[1].Zeit_Top:5);
+   GotoXY(15, Z_Start+6); Write (Flatop[1].Zeit_Wait:5);
+   GotoXY(22, Z_Start+6); Write_Real_10V_Bipol (Flatop[1].Soll);
+   GotoXY(33, Z_Start+6); Write (Hex_Word (Flatop[1].Soll));
+
+   GotoXY(07, Z_Start+7); Write (Flatop[2].Zeit_Top:5);
+   GotoXY(15, Z_Start+7); Write (Flatop[2].Zeit_Wait:5);
+   GotoXY(22, Z_Start+7); Write_Real_10V_Bipol (Flatop[2].Soll);
+   GotoXY(33, Z_Start+7); Write (Hex_Word (Flatop[2].Soll));
+
+   GotoXY(07, Z_Start+8); Write (Flatop[3].Zeit_Top:5);
+   GotoXY(15, Z_Start+8); Write (Flatop[3].Zeit_Wait:5);
+   GotoXY(22, Z_Start+8); Write_Real_10V_Bipol (Flatop[3].Soll);
+   GotoXY(33, Z_Start+8); Write (Hex_Word (Flatop[3].Soll));
+   GotoXY(13, Z_Start);   Write (Transf_Cnt:8);
+   Disp_Flat_Active (0);
+   Disp_R_H;
+
+   Ch := ' ';
+   if Ch = ' ' then
+     begin
+      Ini_Msg_Win;
+      Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende mit [X]');
+      repeat until KeyEPressed;
+      Ch := NewReadKey;
+      if  Ch in ['x','X'] then Goto 99;
+     end;
+
+   repeat
+    repeat
+      Set_Text_win;
+      Transf_Cnt := Transf_Cnt+ 1;
+      Flat_Top (1);
+      Flat_Top (2);
+      Flat_Top (3);
+      Hist_Index := Hist_Index + 1;                 {gilt fÅr alle drei Flattops}
+      if Hist_Index = Hist_Max + 1 then Hist_Index := 0;
+      GotoXY(13, Z_Start);
+      Write (Transf_Cnt:8);
+    until KeyEPressed or (Ch = ' ');
+
+    if KeyEPressed then Ch := NewReadKey;
+    if Ch = ' ' then
+      begin
+       Flat_Zero;                    {Setze Magnet auf Sollwert 0}
+       Disp_Flat_Active (0);
+       Disp_Hist_Ary (Transf_Cnt);                {Zeige letzte 10 Differenzwerte}
+       Disp_R_H;
+       Ini_Msg_Win;
+       Write('Stop/Single Step mit <SPACE>, Loop mit <CR>, neue Mil-<A>dresse   Ende mit [X]');
+       repeat until KeyEPressed;
+      end;
+    Ch := NewReadKey;
+
+    if Ch in ['a','A'] then
+     begin
+       New_Ifc_Adr;
+       Set_Text_Win;
+       GotoXY(49, Z_Start+0); Write (Hex_Byte(Ifc_Test_Nr));
+       Ini_Msg_Win;
+       Write('Stop/Single Step mit <SPACE>, Loop mit <CR>, neue Mil-<A>dresse   Ende mit [X]');
+       repeat until KeyEPressed;
+       Ch := NewReadKey;
+     end;
+
+    Clear_Hist_Disp;
+   until Ch in ['x','X'];
+99: Flat_Zero;                    {Setze Magnet auf Sollwert 0}
+ end; {Mil_NG_Puls_Vari}
+
+
+procedure Mil_NG_Puls_Fix;     {Feste Werte fÅr Sollwert, Istwert, Zeit}
+{ Drei Magnetsollwerte und Istwerte sollen in definierten AbstÑnden gesetzt/
+  gelesen werden. Abweichungen Soll-Ist soll ermittelt und max. 10 Vergleiche
+  angezeigt werden.
+}
+ label 99;
+ const Hist_Max = 9;
+       Top_Max  = 3;    {Anzahl der Daten pro Flattop: Soll, Top_time, Wait}
+       Z_Start  = 1;
+       Write_Fct_Code = $06;
+       Read_Fct_Code  = $81;
+       Flat_Ary_Max = 7;           {Anzahl der vordefinierten Test-DatensÑtze}
+ type
+  TSollIst = record
+              Soll     : Word;       {Sollwert}
+              Ist      : Word;       {Istwert}
+              S_I_Diff : Word;
+              Rd_Error : Boolean;    {Zeigt Fehler beim Istwertlesen an}
+              Zeit_Top : Word;       {Dauer des Flattop}
+              Zeit_Wait: Word;       {Warte, bis Istwert gelesen werden kann}
+              Hist_Diff: array [0..Hist_Max] of Word; {Historische Differenzen}
+             end;
+  TFlatParm = record
+               Soll     : Word;
+               Top      : Word;
+               Wait     : Word;
+              end;
+  TParmAry  = array [1..3] of TFlatParm;
+  TFlatAry  = array [1..Flat_Ary_Max] of TParmAry;
+
+ const
+  FlatFix: TFlatAry =
+  (
+  ((Soll: $2000; Top: 1000; Wait:   50),
+   (Soll: $0000; Top: 1000; Wait:   50),
+   (Soll: $4000; Top: 1000; Wait:   50)),
+
+  ((Soll: $4000; Top: 1000; Wait:   50),
+   (Soll: $0000; Top: 1000; Wait:   50),
+   (Soll: $7FFF; Top: 1000; Wait:   50)),
+
+  ((Soll: $4000; Top: 1000; Wait:   50),
+   (Soll: $0000; Top: 1000; Wait:   50),
+   (Soll: $7FFF; Top: 1000; Wait:   50)),
+
+  ((Soll: $7FFF; Top: 1000; Wait:   50),     {10 V 1,0 sec}
+   (Soll: $0000; Top: 0500; Wait:   50),
+   (Soll: $0000; Top: 0500; Wait:   50)),
+
+  ((Soll: $7FFF; Top: 0500; Wait:   50),     {10 V 0,5 sec}
+   (Soll: $0000; Top: 0250; Wait:   50),
+   (Soll: $0000; Top: 0250; Wait:   50)),
+
+  ((Soll: $4000; Top: 1000; Wait:   50),     { 5 V 1,0 sec}
+   (Soll: $0000; Top: 0500; Wait:   50),
+   (Soll: $0000; Top: 0500; Wait:   50)),
+
+  ((Soll: $4000; Top: 0500; Wait:   50),     { 5 V 0,5 sec}
+   (Soll: $0000; Top: 0250; Wait:   50),
+   (Soll: $0000; Top: 0250; Wait:   50))
+ );
+
+ var
+  FlaTop : array [1..Top_Max] of TSollIst;
+  Wr_Fct_Code, Rd_Fct_Code : Byte;
+  MilErr : TMilErr;
+  Fct    : TFct;
+  RetAdr : Byte;
+  OnlineErr: TOnlineErr;
+  Status_Data: Word;
+  Hist_Index : Byte;         {gilt fÅr Array mit den historischen Differenzen}
+  Z : Byte;
+  Data_Set_Nr : Byte;
+
+
+  procedure Mag_Headline;
+   begin
+    Ini_Headl_Win;
+    GotoXY(01,01);
+    write('                            Test fÅr gepulste Magnete                           ');
+    GotoXY(01,02);
+    write('Schreibe in definierten AbstÑnden 3 Sollwerte u. lese Istwerte verzîgert zurÅck');
+    ini_text_win;
+    Ini_Msg_Win;
+    Write ('Weiter mit <Space>    oder    E[X]it ');
+    Set_Text_Win;
+   end;
+
+  procedure Ini_Flatop_Ary;
+   var y,z : Byte;
+   begin
+    for y := 1 to Top_Max do
+     begin
+      Flatop[y].Soll     := 0;
+      Flatop[y].Ist      := 0;
+      Flatop[y].S_I_Diff := 0;
+      Flatop[y].Rd_Error := False;
+      Flatop[y].Zeit_Top := 0;
+      Flatop[y].Zeit_Wait:= 0;
+      for z:=0 to Hist_Max do Flatop[y].Hist_Diff[z] := 0;
+     end; {for y}
+   end; {Ini_Flatop_Ary}
+
+
+  function Ask_Flat_Nr: Boolean;         {Erfrage Tabelle der fixen Parameter}
+   label 01;
+   const Z_Start = 10;
+   var z,m : Byte;
+
+   procedure Set_Flat_Parm (Num: Byte);
+    var n : Byte;
+    begin
+     for n := 1 to 3 do
+      begin
+        Flatop[n].Soll      := FlatFix[Num,n].Soll;
+        Flatop[n].Zeit_Top  := FlatFix[Num,n].Top;
+        Flatop[n].Zeit_Wait := FlatFix[Num,n].Wait;
+      end;
+    end; {Set_Flat_Parm}
+
+   begin
+      Ask_Flat_Nr := False;
+      Ini_Text_Win;
+      GotoXY(06,04); write('Verschiedene, vordefinierte Flat-Top Parameter DatensÑtze auswÑhlbar!');
+
+      GotoXY(01, Z_Start);
+      TextColor(Brown);
+      writeln (' Daten   v-- Flat-Top 1 --v     v-- Flat-Top 2 --v     v-- Flat-Top 3 --v');
+      writeln (' Satz     Soll    Top  Read      Soll    Top  Read      Soll    Top  Read');
+      writeln ('  Nr.    [Volt]   [ms] [ms]     [Volt]   [ms] [ms]     [Volt]   [ms] [ms]');
+      TextColor(Black);
+
+      for z := 1 to  Flat_Ary_Max do
+       begin
+         begin
+           m := 1;
+           GotoXY(04, Z_Start+3+z); Write (z);
+           GotoXY(08, Z_Start+3+z); Write_Real_10V_Bipol (FlatFix[z,m].Soll);
+           GotoXY(19, Z_Start+3+z); Write (FlatFix[z,m].Top:4);
+           GotoXY(24, Z_Start+3+z); Write (FlatFix[z,m].Wait:4);
+
+           m := 2;
+           GotoXY(31, Z_Start+3+z); Write_Real_10V_Bipol (FlatFix[z,m].Soll);
+           GotoXY(42, Z_Start+3+z); Write (FlatFix[z,m].Top:4);
+           GotoXY(47, Z_Start+3+z); Write (FlatFix[z,m].Wait:4);
+
+           m := 3;
+           GotoXY(54, Z_Start+3+z); Write_Real_10V_Bipol (FlatFix[z,m].Soll);
+           GotoXY(65, Z_Start+3+z); Write (FlatFix[z,m].Top:4);
+           GotoXY(70, Z_Start+3+z); Write (FlatFix[z,m].Wait:4);
+         end;
+       end;
+
+     Ini_Msg_Win;
+     write ('Bitte Datensatz-Nr eingeben [1..',Flat_Ary_Max,'] oder Abbruch mit [Q]: ');
+     repeat until KeyEPressed;
+     Ch := NewReadKey;
+     case Ch of
+      '1' : begin Set_Flat_Parm (1); Data_Set_Nr:= 1; Ask_Flat_Nr := True; end;
+      '2' : begin Set_Flat_Parm (2); Data_Set_Nr:= 2; Ask_Flat_Nr := True; end;
+      '3' : begin Set_Flat_Parm (3); Data_Set_Nr:= 3; Ask_Flat_Nr := True; end;
+      '4' : begin Set_Flat_Parm (4); Data_Set_Nr:= 4; Ask_Flat_Nr := True; end;
+      '5' : begin Set_Flat_Parm (5); Data_Set_Nr:= 5; Ask_Flat_Nr := True; end;
+      '6' : begin Set_Flat_Parm (6); Data_Set_Nr:= 6; Ask_Flat_Nr := True; end;
+      '7' : begin Set_Flat_Parm (7); Data_Set_Nr:= 7; Ask_Flat_Nr := True; end;
+      'q','Q' : goto 01;
+     else
+      begin
+        Ini_Err_Win;
+        write ('Keine gÅltige Datenssatz-Nr. !!    Weiter mit beliebiger Taste');
+        repeat until KeyEPressed;
+      end;
+     end; {case}
+  01:
+  end; {Ask_Flat_Nr}
+
+  procedure Ini_Flat_Win;
+    var Index : Byte;
+    begin
+     Ini_Text_Win;
+     TextColor(Brown);               {Setze Schriftfarbe}
+     GotoXY(01, Z_Start);
+     Write ('Test_Count:            Status:      IFC-Adr[H]:     Wr-Fct[H]:     Rd-Fct[H]:   ');
+     GotoXY(01, Z_Start+1);
+     Write ('Aktives Flat-Top:      R/H   :      DataSet-Nr:                                  ');
+     TextColor(Brown);               {Setze Schriftfarbe}
+
+     GotoXY(01, Z_Start+3);
+     Write ('Flatop Dauer  +Read    -- Sollwert --      Istwert         Diff. Soll-Ist       ');
+     GotoXY(01, Z_Start+4);
+     Write ('  Nr   [ms]    [ms]   [Volt]    [Hex]      [Volt]              [Volt]           ');
+     TextColor(Black);               {Setze Schriftfarbe}
+
+     GotoXY(01, Z_Start+5);
+     Write ('  00                                                                            ');
+     GotoXY(01, Z_Start+6);
+     Write ('  01                                                                            ');
+     GotoXY(01, Z_Start+7);
+     Write ('  02                                                                            ');
+     GotoXY(01, Z_Start+8);
+     Write ('  03                                                                            ');
+
+     TextColor(Brown);               {Setze Schriftfarbe}
+     GotoXY(01, Z_Start+9);
+     Write ('v-- Anzeige der letzten 10  Soll-Ist Differenz-Werte (N-1 = vorletzter Wert) --v');
+     GotoXY(20, Z_Start+10); Write ('Diff- Flatop 1');
+     GotoXY(41, Z_Start+10); Write ('Diff- Flatop 2');
+     GotoXY(61, Z_Start+10); Write ('Diff- Flatop 3');
+
+     for Index := 0 to Hist_Max do
+      begin
+        GotoXY(02, Z_Start+11+Index);
+        Write ('N -',Index:2);
+      end;
+
+     TextColor(Red);
+     GotoXY(08, Z_Start+11+Hist_Max+1);
+     Write ('[Im LOOP-MODE keine Anzeige der Soll-Ist Differenzen N-0 ... N-9 !]');
+     TextColor(Black);               {Setze Schriftfarbe}
+   end;
+
+  procedure Disp_Flat_Active (Num : Byte);  {Aktives Flattop auf Bildschirm}
+   var x : Byte;
+   begin
+     GotoXY(20, Z_Start+1); Write (Num);    {aktives Flattop}
+     for x := 0 to 3 do                     {lîsche Zeiger}
+      begin
+        GotoXY(01, Z_Start+5+x);
+        Write ('  ');
+      end;
+
+     case Num of
+       0 : begin   GotoXY(01, Z_Start+5);  Write ('->');  end;
+       1 : begin   GotoXY(01, Z_Start+6);  Write ('->');  end;
+       2 : begin   GotoXY(01, Z_Start+7);  Write ('->');  end;
+       3 : begin   GotoXY(01, Z_Start+8);  Write ('->');  end;
+     end;
+   end;
+
+  function Flat_Top (Num: Byte): Boolean;
+  { Die Dauer des Flattops und die Leseverzîgerung des Istwertes sollen Åber
+    den Timer2 bestimmmt werden, da Timer1 fÅr MIL-Operationen reserviert ist.
+    Zuerst wird Timer2 mit der Istwert-Verzîgerung geladen und dann mit
+    der restlichen Zeit als Differenz: Flattop-Time minus Leseverzîgerung
+  }
+   var Top_Minus_Wait_Time : LongInt;
+       Read_Time_10us      : LongInt;
+       Soll_Ist_Diff       : Word;
+   begin
+    Flat_Top := False;         {Default}
+    Disp_Flat_Active (Num);
+    Top_Minus_Wait_Time:= Flatop[Num].Zeit_Top - Flatop[Num].Zeit_Wait; {ms!!}
+    Top_Minus_Wait_Time:= Top_Minus_Wait_Time * 100;      {10 us * 100 = 1 ms}
+    Read_Time_10us     := Flatop[Num].Zeit_Wait * 100;    {10 us * 100 = 1 ms}
+    Fct.B.Adr := Ifc_Test_Nr;
+    Fct.B.Fct := Wr_Fct_Code;
+    Mil.Wr (Flatop[Num].Soll , Fct, MilErr);  {Setze Flattop Sollwert}
+
+    Mil.Timer2_Wait(Read_Time_10us);          {Read-Time abwarten; Basis 10 us}
+    Mil.Timer2_Set(Top_Minus_Wait_Time);      {Lade Ende des Flattops}
+    Fct.B.Adr := Ifc_Test_Nr;
+    Fct.B.Fct := Rd_Fct_Code;
+    Mil.Rd ( Flatop[Num].Ist, Fct, MilErr);   {Lese Istwert}
+    GotoXY(43, Z_Start+5+Num);                {Display-Position Istwert}
+    if MilErr <> No_Err then
+     begin
+      Write ('  Rd_Err  ');
+      Flatop[Num].Rd_Error := True;
+      GotoXY(63, Z_Start+5+Num); Write('          ');
+     end
+    else
+     begin
+      Write_Real_10V_Bipol (Flatop[Num].Ist);
+      Flatop[Num].Rd_Error := False;
+      Flatop[Num].S_I_Diff := Flatop[Num].Soll - Flatop[Num].Ist;
+      Flatop[Num].Hist_Diff[Hist_Index] := Flatop[Num].S_I_Diff;
+      GotoXY(63, Z_Start+5+Num); Write_Real_10V_Bipol (Flatop[Num].S_I_Diff);
+     end;
+
+    repeat until Mil.Timeout2;   {Warte bis zum Ende des Flattops}
+   end; {Flat_Top}
+
+  procedure Flat_Zero;
+   begin
+    Fct.B.Adr := Ifc_Test_Nr;
+    Fct.B.Fct := Wr_Fct_Code;
+    Mil.Wr (0 , Fct, MilErr);  {Setze Flattop Sollwert}
+    Disp_Flat_Active (0);
+   end;
+
+{Anzeige der alten Differenzwerte: falls nur eine Messung gemacht wurde, auch
+nur eine Zeile anzeigen. Erst nach Hist_Max Messungen, werden alle historischen
+Werte angezeigt}
+ procedure Disp_Hist_Ary (Test_Count: Word);
+   var Index       : Byte;
+       Start_Index : Byte;
+       Flat_Nr : Byte;
+       Rd_Index  : Integer;
+       DispLn_Num: Word;
+
+   begin
+     Set_Text_Win;
+     Flat_Nr   := 1;
+     if Test_Count > Hist_Max then DispLn_Num := Hist_Max
+     else DispLn_Num := Test_Count - 1;          {Wenig Daten, wenig anzeigen}
+
+     for Index := 0 to DispLn_Num do
+     begin
+       Rd_Index := (Hist_Index - Index) - 1;  {Hist_index zeigt auf next write}
+       if Rd_Index < 0 then Rd_Index := Hist_Max + 1 + Rd_Index;
+       GotoXY(22, Z_Start+11+Index);
+       if Flatop[Flat_Nr].Rd_Error then
+        Write ('Rd_Err')
+       else
+         Write_Real_10V_Bipol (Flatop[Flat_Nr].Hist_Diff[Rd_Index]);
+      end;
+
+     Flat_Nr   := 2;
+     if Test_Count > Hist_Max then DispLn_Num := Hist_Max
+     else DispLn_Num := Test_Count - 1;          {Wenig Daten, wenig anzeigen}
+
+     for Index := 0 to DispLn_Num do
+     begin
+       Rd_Index := (Hist_Index - Index) - 1;  {Hist_index zeigt auf next write}
+       if Rd_Index < 0 then Rd_Index := Hist_Max + 1 + Rd_Index;
+       GotoXY(43, Z_Start+11+Index);
+       if Flatop[Flat_Nr].Rd_Error then
+        Write ('Rd_Err')
+       else
+         Write_Real_10V_Bipol (Flatop[Flat_Nr].Hist_Diff[Rd_Index]);
+      end;
+
+     Flat_Nr   := 3;
+     if Test_Count > Hist_Max then DispLn_Num := Hist_Max
+     else DispLn_Num := Test_Count - 1;          {Wenig Daten, wenig anzeigen}
+
+     for Index := 0 to DispLn_Num do
+     begin
+       Rd_Index := (Hist_Index - Index) - 1;  {Hist_index zeigt auf next write}
+       if Rd_Index < 0 then Rd_Index := Hist_Max + 1 + Rd_Index;
+       GotoXY(63, Z_Start+11+Index);
+       if Flatop[Flat_Nr].Rd_Error then
+        Write ('Rd_Err')
+       else
+         Write_Real_10V_Bipol (Flatop[Flat_Nr].Hist_Diff[Rd_Index]);
+      end;
+   end; {Disp_Hist_Ary}
+
+ procedure Clear_Hist_Disp;
+  var Index : Byte;
+   begin
+     Set_Text_Win;
+     for Index := 0 to Hist_Max  do
+      begin
+        GotoXY(01, Z_Start+11+Index); ClrEol;
+      end;
+
+     TextColor(Brown);               {Setze Schriftfarbe}
+     for Index := 0 to Hist_Max  do
+      begin
+        GotoXY(02, Z_Start+11+Index);
+        Write ('N -',Index:2);
+      end;
+     TextColor(Black);               {Setze Schriftfarbe}
+   end;
+
+ procedure Disp_R_H;
+  begin
+   Fct.B.Adr := Ifc_Test_Nr;
+   Fct.B.Fct := Fct_Rd_Stat0;               {Status C0}
+   Mil.Rd (Status_Data, Fct, MilErr);
+   GotoXY(32, Z_Start);
+   if BitTst (Status_Data, 8) then          {Bit 8 gibt Ein/Aus an}
+     Write ('Ein')
+   else
+     Write ('Aus');
+
+   Fct.B.Fct := Fct_Rd_Stat2;               {Status C2}
+   Mil.Rd (Status_Data, Fct, MilErr);
+   GotoXY(32, Z_Start+1);
+   if BitTst (Status_Data, 8) then          {Bit 8 gibt R/H an}
+     Write ('R')
+   else
+     Write ('H');
+  end;
+
+ begin                        {Mil_NG_Puls}
+   Mil_Ask_Ifc;
+   Fct.B.Adr := Ifc_Test_Nr;
+   Hist_Index := 0;
+   Transf_Cnt := 0;
+   Ini_Flatop_Ary;
+   Mag_Headline;
+   Ini_Text_Win;
+
+   Wr_Fct_Code := Write_Fct_Code;   {Fct-Code sind jetzt ebenso fest}
+   Rd_Fct_Code := Read_Fct_Code;
+
+   if not Ask_Flat_Nr then goto 99;
+   Ini_Flat_Win;
+   GotoXY(49, Z_Start+0); Write (Hex_Byte(Ifc_Test_Nr));
+   GotoXY(64, Z_Start+0); Write (Hex_Byte(Wr_Fct_Code));
+   GotoXY(79, Z_Start+0); Write (Hex_Byte(Rd_Fct_Code));
+
+   GotoXY(22, Z_Start+5); Write_Real_10V_Bipol (0);
+   GotoXY(33, Z_Start+5); Write (Hex_Word (0));
+
+   GotoXY(07, Z_Start+6); Write (Flatop[1].Zeit_Top:5);
+   GotoXY(15, Z_Start+6); Write (Flatop[1].Zeit_Wait:5);
+   GotoXY(22, Z_Start+6); Write_Real_10V_Bipol (Flatop[1].Soll);
+   GotoXY(33, Z_Start+6); Write (Hex_Word (Flatop[1].Soll));
+
+   GotoXY(07, Z_Start+7); Write (Flatop[2].Zeit_Top:5);
+   GotoXY(15, Z_Start+7); Write (Flatop[2].Zeit_Wait:5);
+   GotoXY(22, Z_Start+7); Write_Real_10V_Bipol (Flatop[2].Soll);
+   GotoXY(33, Z_Start+7); Write (Hex_Word (Flatop[2].Soll));
+
+   GotoXY(07, Z_Start+8); Write (Flatop[3].Zeit_Top:5);
+   GotoXY(15, Z_Start+8); Write (Flatop[3].Zeit_Wait:5);
+   GotoXY(22, Z_Start+8); Write_Real_10V_Bipol (Flatop[3].Soll);
+   GotoXY(33, Z_Start+8); Write (Hex_Word (Flatop[3].Soll));
+   GotoXY(13, Z_Start);   Write (Transf_Cnt:8);
+   GotoXY(50, Z_Start+1); Write (Data_Set_Nr);             {aktiver Datensatz}
+   Disp_Flat_Active (0);
+   Disp_R_H;
+
+   Ch := ' ';
+   if Ch = ' ' then
+     begin
+      Ini_Msg_Win;
+      Write('Stop/Single Step mit <SPACE>, Loop mit <CR>, neue Adr mit <F10>   Ende mit [X]');
+      repeat until KeyEPressed;
+      Ch := NewReadKey;
+      if  Ch in ['x','X'] then Goto 99;
+     end;
+
+   repeat
+    repeat
+      Set_Text_win;
+      Transf_Cnt := Transf_Cnt+ 1;
+      Flat_Top (1);
+      Flat_Top (2);
+      Flat_Top (3);
+      Hist_Index := Hist_Index + 1;                 {gilt fÅr alle drei Flattops}
+      if Hist_Index = Hist_Max + 1 then Hist_Index := 0;
+
+      GotoXY(13, Z_Start);
+      Write (Transf_Cnt:8);
+    until KeyEPressed or (Ch = ' ');
+
+    if Ch = ' ' then
+      begin
+       Flat_Zero;                    {Setze Magnet auf Sollwert 0}
+       Disp_Flat_Active (0);
+       Disp_Hist_Ary (Transf_Cnt);                {Zeige letzte 10 Differenzwerte}
+       Disp_R_H;
+       Ini_Msg_Win;
+       Write('Stop/Single Step mit <SPACE>, Loop mit <CR>, neue Adr mit <F10>   Ende mit [X]');
+       repeat until KeyEPressed;
+      end;
+    Ch := NewReadKey;
+
+   if Ch = #0 then
+    begin
+      Ch := NewReadKey;
+      case ord (Ch) of
+       Taste_F10: begin
+                    New_Ifc_Adr;
+                    Set_Text_Win;
+                    GotoXY(49, Z_Start+0); Write (Hex_Byte(Ifc_Test_Nr));
+                    Ini_Msg_Win;
+                    Write('Stop/Single Step mit <SPACE>, Loop mit <CR>, neue Adr mit <F10>   Ende mit [X]');
+                    repeat until KeyEPressed;
+                    Ch := ' ';
+                  end; {Taste_F10}
+      end;  {Case}
+    end;
+    Clear_Hist_Disp;
+   until Ch in ['x','X'];
+99: Flat_Zero;                    {Setze Magnet auf Sollwert 0}
+    Disp_Flat_Active (0);
+ end; {Mil_NG_Puls_Fix}
+
+
+ {Bits, die sich verÑndern werden farblich markiert}
+ procedure Mil_Stat_Tabelle;
+  label 99;
+  const
+   Tab_Max = 3;
+   Stat_Line =
+       'Status-Bits                          MAGNETE    ' +
+       '                    [26.06.1996]' +
+       '                                Tabellen-öbersicht                             ';
+   Zeile_Start  = 01;
+   Spalte_Start = 01;
+   Wait_Time    = 150000; {1,5 sec}
+   SW_Plus      = $2000;  {+2,500 Volt}
+   SW_Minus     = $E000;  {-2,500 Volt}
+   Loop_Wait1: LongInt = 15000;  {0,15 sec}
+   Loop_Wait2: LongInt = 100;
+   Stat_Byte_Max= 2;
+   Err_Bits_Max = 7;
+
+  type
+   TStat_Byte_Ary   = array [0..2] of Byte;
+   TStat_Error_Byte = array [0..7] of Boolean;
+   TStat_Error_Ary  = array [0..2] of TStat_Error_Byte;
+
+  var
+   Stat_Old_Bytes : TStat_Byte_Ary;
+   Stat_Err_Ary   : TStat_Error_Ary;
+   Loop_Wait      : LongInt;
+   Read_Data,Fct_Code: Word;
+   MilErr : TMilErr;
+   Fct    : TFct;
+
+   Tab_Nr    : Word;
+   Zeile_Act : Byte;
+   Spalte_Act: Byte;
+   Data_Act  : Byte;
+   Mode_Act  : Boolean;
+   Byte_Act  : Byte;     {aktuelle Daten-Byte Nr}
+   transf_cnt: LongInt;
+   timout_cnt: LongInt;
+   Ch        : Char;
+   LastNr    : Byte;
+   IW1, IW2  : Word;
+   First_Online: Byte;
+   N,M       : Word;
+   RetAdr    : Byte;
+   OnlineErr : TOnlineErr;
+   SW_Act    : Word;
+   SW_Valid  : Boolean;
+   Sonder_Zeichen : Char;
+   Stat_Valid: Boolean; {FehlerprÅfung nur nach dem 1. Lesen von 3 Status-Bytes}
+   Stat_Init : Boolean;
+   Err_Stat_Intrl: Boolean;
+   Interl_Old    : Boolean;
+   Interl_Ini    : Boolean;
+
+  procedure Displ_Stat_Bits (D_Spalte, D_Zeile, D_Byte:Byte; D_Mode: Boolean; Byte_Index: Byte);
+   var Idx : Byte;
+   begin
+    Set_Text_Win;
+    if D_Mode = False then      {Fehler beim Datenlesen: Lîsche}
+     begin
+       for Idx := 0 to 7 do
+        begin
+          GotoXY(D_Spalte, D_Zeile);
+          Write ('F');
+          D_Zeile := D_Zeile + 1;
+        end;
+     end
+    else
+     begin                      {kein Fehler beim Datenlesen: anzeigen}
+      TextColor(Black);
+      for Idx := 0 to 7 do
+       begin
+       {Vergleiche alte Statusbits mit neuem Wert, bei énderung Error-Bit setzen}
+       {Falls neues Bit=1 and altes Bit=0, oder neues Bit=0 and altes Bit=1}
+
+       if Stat_Valid then     {nur wenn Vergleichsdaten vorliegen: auswerten}
+        begin
+         if not (((BitTst(D_Byte,Idx) and BitTst(Stat_Old_Bytes[Byte_Index],Idx)))
+                or
+                (not BitTst (D_Byte,Idx) and not BitTst(Stat_Old_Bytes[Byte_Index],Idx)))
+         then Stat_Err_Ary[Byte_Index,Idx] := True;
+
+         if Stat_Err_Ary[Byte_Index,Idx] then         {Bei Error: Rot}
+            TextColor(Red) else TextColor(Black);
+        end; {if Status_valid}
+
+
+      if not Stat_Valid then TextColor(Black);  {Markierung aufheben}
+      GotoXY(D_Spalte, D_Zeile);
+      if BitTst (D_Byte, Idx) then
+       begin
+         Write ('1');
+       end
+      else
+       begin
+         Write ('0');
+       end;  {Bit 0/1}
+     D_Zeile := D_Zeile + 1;
+     TextColor(Black);        {Immer nur 1 Bit ist Rot}
+    end;   {for}
+   Stat_Old_Bytes[Byte_Index] := D_Byte; {Save neuen Wert zum nÑchsten Vergleich}
+   if Byte_Index=Stat_Byte_Max then Stat_Valid:=True; {Vergleich erst, wenn 3x8Bit gespeichert}
+  end;
+ end; {Displ_Stat_Bits}
+
+   procedure Ini_Stat_Win;
+   begin                             {Definitionen gelten bis neu definiert}
+    Window(1, 1, 80, 2);             {Definiert ein Textfenster: Spalte/Zeile}
+    TextBackground(Magenta);         {Setze Hintergrund fÅr Textfenster}
+    TextColor(Yellow);               {Setze Schriftfarbe}
+    ClrScr;                          {Clear Window}
+    GotoXY(1, 1);                    {Cursor auf Anfang Fenster}
+   end;
+
+  procedure Slow_Key;
+   var Zeichen : Char;
+   begin
+     repeat
+      if KeyEpressed then
+       begin
+         Zeichen := NewReadKey;
+         if Zeichen = #0 then Zeichen :=NewReadKey;
+       end;
+     until not KeyEpressed;
+   end;
+
+  procedure Ini_Stat_Ary;
+   var N, M : Word;
+   begin
+     for N := 0 to Stat_Byte_Max do
+      begin
+       Stat_Old_Bytes[N] := 0;
+       for M := 0 to Err_Bits_Max do Stat_Err_Ary[N,M] := False;
+      end;
+   end;
+
+
+ begin                 {Ab hier: mainbody Mil_Stat_Tab}
+  Stat_Valid    := False;  {Noch kein Status gelesen}
+  Interl_Old    := False;
+  Interl_Ini    := True;   {Interlock-Status ist im INIT-Mode}
+  Err_Stat_Intrl:= False;
+
+  Ini_Stat_Ary;         {Init Status-Error-Bits und Status-Old-Arrray}
+  GotoXY(Spalte_Start+01, Zeile_Start);
+  Mil_Ask_Ifc;
+  Fct.B.Adr := Ifc_Test_Nr;
+  Ini_Stat_Win;
+  Write(Stat_Line);
+  Ini_Text_Win;
+  GotoXY(05, 02); Write ('Tabellen mit Belegungen der STATUS-Bits fÅr Funktionscodes C0, C1, C2 ');
+  TextColor(Yellow);
+  GotoXY(05, 03); Write ('Hinweis: Die Bit-Anzeige 0/1 wird ROT, falls der Status sich Ñndert!! ');
+  TextColor(Black);
+
+  GotoXY(01, 05);
+  Writeln ('    01 : Hochspannung                             ');
+  Write   ('    02 : SIS-Magnete SVE ');  Write ('['); TextColor (Red);
+                                          Write('Standard');   TextColor (Black);  Writeln (']');
+  Writeln ('    03 : Tekelec-Umlenker EH-Keller               ');
+  Writeln ('    04 : Tekelec-NetzgerÑte LSB4                  ');
+  Writeln ('    05 : Danfysik-NetzgerÑte EH- u. HLI-Keller    ');
+  Writeln ('    06 : AEG SVE 1 - SIS                          ');
+  Writeln ('    07 : AEG SVE 2 - SIS                          ');
+  Writeln ('    08 : AEG SVE 1 - ESR  2 - ESR  3 - ESR        ');
+  Writeln ('    09 : SVE 5 -, 6 -, 7 -, 10 -, 12 - ESR        ');
+  Writeln ('    0A : SVE 4 - 9 - ESR                          ');
+  Writeln ('    0B : SVE 2 - H  3 - H                         ');
+
+  GotoXY(05, 22);   write ('Welche Status-Tabelle anzeigen ?'); TextColor(Brown);
+  GotoXY(50, 08);  write('Belegung Funktionstasten: '); TextColor(Black);
+  Displ_FTasten;
+  if not (Ask_Hex_Break (Tab_Nr, Byt)) then goto 99;
+
+  case Tab_Nr of
+    1 : Status_Tab1 (Spalte_Start, Zeile_Start);
+    2 : Status_Tab2 (Spalte_Start, Zeile_Start);
+    3 : Status_Tab3 (Spalte_Start, Zeile_Start);
+    4 : Status_Tab4 (Spalte_Start, Zeile_Start);
+    5 : Status_Tab5 (Spalte_Start, Zeile_Start);
+    6 : Status_Tab6 (Spalte_Start, Zeile_Start);
+    7 : Status_Tab7 (Spalte_Start, Zeile_Start);
+    8 : Status_Tab8 (Spalte_Start, Zeile_Start);
+    9 : Status_Tab9 (Spalte_Start, Zeile_Start);
+   $A : Status_Tab0A(Spalte_Start, Zeile_Start);
+   $B : Status_Tab0B(Spalte_Start, Zeile_Start);
+  else
+   goto 99;
+  end;
+
+   Ini_IstwMag_Win;
+   Ini_TastMag_Win;
+   Transf_Cnt := 0;
+   Timout_Cnt := 0;
+   SW_Valid   := False; {User hat noch keinen Sollwert definiert}
+   Loop_Wait  := Loop_Wait1;
+
+   Ch := ' ';
+   if Ch = ' ' then
+     begin
+      Ini_Msg_Win;
+      Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende mit [X]');
+      repeat until KeyEPressed;
+      Ch := NewReadKey;
+      if  Ch in ['x','X'] then Goto 99;
+     end;
+   Ch := ' ';
+
+   repeat
+    repeat
+     Set_Text_win;
+     Transf_Cnt := Transf_Cnt+ 1;
+
+                { Lese C0-Status und zeige in bitweise an }
+     Fct.B.Fct := Fct_Rd_Stat0;
+     Mil.Rd (read_data, Fct, MilErr);
+     if MilErr <> No_Err then
+      begin
+        Mode_Act   := False;
+        Timout_Cnt := Timout_Cnt +1;
+      end
+     else
+      begin  {kein Timeout}
+        Mode_Act := True;
+        Data_Act := Read_Data shr 8;
+      end;
+     Byte_Act  := 0;                 {Byte-Markierung}
+     Zeile_Act := 01;
+     Spalte_Act:= 02;
+     Displ_Stat_Bits (Spalte_Act,  Zeile_Act, Data_Act, Mode_Act, Byte_Act);
+
+                { Lese C1-Status und zeige in bitweise an }
+     Fct.B.Fct := Fct_Rd_Stat1;
+     Mil.Rd (read_data, Fct, MilErr);
+     if MilErr <> No_Err then
+      begin
+        Mode_Act := False;
+        Timout_Cnt := Timout_Cnt +1;
+      end
+     else
+      begin  {kein Timeout}
+        Mode_Act := True;
+        Data_Act := Read_Data shr 8;
+      end;
+    Byte_Act  := 1;                 {Byte-Markierung}
+    Zeile_Act := 10;
+    Spalte_Act:= 02;
+    Displ_Stat_Bits (Spalte_Act,  Zeile_Act, Data_Act, Mode_Act, Byte_Act);
+
+                { Lese C2-Status und zeige in bitweise an }
+     Fct.B.Fct := Fct_Rd_Stat2;
+     Mil.Rd (read_data, Fct, MilErr);
+     if MilErr <> No_Err then
+      begin
+        Mode_Act := False;
+        Timout_Cnt := Timout_Cnt +1;
+      end
+     else
+      begin  {kein Timeout}
+        Mode_Act := True;
+        Data_Act := Read_Data shr 8;
+      end;
+    Byte_Act  := 2;                 {Byte-Markierung}
+    Zeile_Act := 01;
+    Spalte_Act:= 43;
+    Displ_Stat_Bits (Spalte_Act,  Zeile_Act, Data_Act, Mode_Act, Byte_Act);
+
+    Set_Text_Win;
+    GotoXY(12, 22); Write (Transf_Cnt:10);
+    GotoXY(52, 22); Write (Timout_Cnt:10);
+
+            {Lese Summeninterlock aus dem Status-Reg. der IFC}
+    Set_Text_Win;
+    GotoXY(43, 10); Write ('SUM-Interlock (0-aktiv): ');
+    Fct.B.Adr := Ifc_Test_Nr;
+    Fct.B.Fct := Fct_Rd_Status;
+    Mil.Rd (Read_Data, Fct, MilErr);
+
+    if MilErr = No_Err then
+     begin                   {énderung des Intrl-Status: Rot markieren!!}
+      TextColor(Black);
+      if BitTst (Read_Data, 12) then              {Interlock?}
+       begin                  {Kein Interlock!!}
+        if not Interl_Ini then
+         begin
+          if Interl_Old then  Err_Stat_Intrl:= True;  {vorher war Interlock}
+         end;
+        If Err_Stat_Intrl then TextColor(Red);
+        write(' 1 ');
+        Interl_Old := False;
+        Interl_Ini := False;  {Nach dem 1. Durchlauf bleibt Status False}
+       end
+      else
+       begin                 {Ja, Interlock-Fall}
+         if not Interl_Ini then
+          begin
+           if not Interl_Old then Err_Stat_Intrl:= True; {vorher kein Interl}
+          end;
+         if Err_Stat_Intrl then TextColor(Red);
+         write(' 0 ');
+         Interl_Old := True;
+         Interl_Ini := False;  {Nach dem 1. Durchlauf bleibt Status False}
+       end;
+     end
+    else
+     begin
+       write('   ');
+     end;
+
+    Sonder_Zeichen := chr(124);  {Absolut Zeichen}
+    TextColor(Black);
+
+    {Zeige stÑndig auch den Istwert}
+    Set_IstwMag_Win;
+    Write (' ------------- ISTWERT -------------');
+    GotoXY(13, 02); Write ('IW1 [',hex_byte(Fct_Rd_Ist1),']');
+    Write ('       IW2 [',hex_byte(Fct_Rd_Ist2),']');
+    GotoXY(01, 03); Write ('[Hex] : '); ClrEol;
+    GotoXY(01, 04); Write ('[Volt]: '); ClrEol;
+    GotoXY(01, 05); Write (Sonder_Zeichen);  Write ('Hex-Diff');
+                    Write (Sonder_Zeichen);  Write (': '); ClrEol;
+
+
+    Fct.B.Fct := Fct_Rd_Ist1;
+    Mil.Rd (IW1, Fct, MilErr);   {Lese Istwert}
+    if MilErr = No_Err then
+     begin
+       Fct.B.Fct := Fct_Rd_Ist2;
+       Mil.Rd (IW2, Fct, MilErr);   {Lese Istwert}
+       GotoXY(15, 03);         Write (Hex_Word(IW1));
+       Write ('           ');  Write (Hex_Word(IW2));
+       GotoXY(13, 04);         Write_Real_10V_Bipol (IW1);
+       Write ('     ');        Write_Real_10V_Bipol (IW2);
+
+       GotoXY(15, 05);
+       if SW_Valid = True then
+        begin
+         if IW1 >  SW_Act then  Write (Hex_Word (IW1 - SW_Act));
+         if IW1 <  SW_Act then  Write (Hex_Word (SW_Act - IW1));
+         if IW1 =  SW_Act then  Write (Hex_Word (0));
+        end;
+     end; {no error}
+
+    Set_TastMag_Win;
+    TextColor(Yellow);
+    GotoXY(01, 01); Write('F1: Res  F4: +   F7: +2.5  F10: Adr ');
+    GotoXY(01, 02); Write('F2: Ein  F5: -   F8:  0.0  F11: Fast');
+    GotoXY(01, 03); Write('F3: Aus  F6: La  F9: -2.5  F12: Init');
+    TextColor(Black);
+
+    Set_Text_Win;
+    Mil.Timer2_Wait (Loop_Wait);
+   until KeyEPressed or (Ch = ' ');
+
+   if KeyEPressed then Ch := NewReadKey;
+   if Ch = ' ' then
+     begin
+      Ini_Msg_Win;
+      Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende mit [X]');
+      repeat until KeyEPressed;
+     end;
+
+   if Ch = #0 then
+    begin
+      Ch := NewReadKey;
+      case ord (Ch) of
+       Taste_F1 : begin
+                   Slow_Key;
+                   Fct.B.Fct := Fct_Reset;
+                   Mil.WrFct (Fct, MilErr);
+                   Ini_Err_Win;
+                   Write(' RESET');
+                   Mil.Timer2_Wait(Wait_Time);          { Wartet mit Timer2}
+                  end;
+       Taste_F2 : begin
+                   Slow_Key;
+                   Fct.B.Fct := Fct_NG_Ein;
+                   Mil.WrFct (Fct, MilErr);
+                   Ini_Err_Win;
+                   Write(' EIN');
+                   Mil.Timer2_Wait(Wait_Time);          { Wartet mit Timer2}
+                  end;
+       Taste_F3 : begin
+                   Slow_Key;
+                   Fct.B.Fct := Fct_NG_Aus;
+                   Mil.WrFct (Fct, MilErr);
+                   Ini_Err_Win;
+                   Write(' AUS');
+                   Mil.Timer2_Wait(Wait_Time);          { Wartet mit Timer2}
+                 end;
+       Taste_F4 : begin
+                   Slow_Key;
+                   Fct.B.Fct := Fct_NG_Plus;
+                   Mil.WrFct (Fct, MilErr);
+                   Ini_Err_Win;
+                   Write(' PLUS');
+                   Mil.Timer2_Wait(Wait_Time);          { Wartet mit Timer2}
+                   end;
+       Taste_F5 : begin
+                   Slow_Key;
+                   Fct.B.Fct := Fct_NG_Minus;
+                   Mil.WrFct (Fct, MilErr);
+                   Ini_Err_Win;
+                   Write(' MINUS');
+                   Mil.Timer2_Wait(Wait_Time);          { Wartet mit Timer2}
+                  end;
+       Taste_F6 : begin
+                   Slow_Key;
+                   if Get_LastNr (LastNr) then
+                    begin
+                      case LastNr of
+                        0 : Fct.B.Fct := Fct_NG_Last0;
+                        1 : Fct.B.Fct := Fct_NG_Last1;
+                        2 : Fct.B.Fct := Fct_NG_Last2;
+                        3 : Fct.B.Fct := Fct_NG_Last3;
+                        4 : Fct.B.Fct := Fct_NG_Last4;
+                        5 : Fct.B.Fct := Fct_NG_Last5;
+                      end;
+                     Mil.WrFct (Fct, MilErr);
+                    end;
+                   Ini_Stat_Win;
+                   Write(Stat_Line);
+                   Ch := ' ';
+                  end; {Taste_F6}
+       Taste_F7 : begin
+                   Slow_Key;
+                   Fct.B.Fct :=  Fct_Wr_Sw1;
+                   Mil.Wr (SW_Plus , Fct, MilErr);
+                   SW_Act   := SW_Plus;
+                   SW_Valid := True;
+                   Ini_Err_Win;
+                   Write('SW  +2.5000 [Volt]   ', Hex_Word(SW_Plus),' [Hex]');
+                   Mil.Timer2_Wait(Wait_Time);          { Wartet mit Timer2}
+                   end;
+       Taste_F8 : begin
+                   Slow_Key;
+                   Fct.B.Fct :=  Fct_Wr_Sw1;
+                   Mil.Wr (0 , Fct, MilErr);
+                   SW_Act := 0;
+                   SW_Valid := True;
+                   Ini_Err_Win;
+                   Write('SW  0.0 [Volt]   ', Hex_Word(0),' [Hex]');
+                   Mil.Timer2_Wait(Wait_Time);          { Wartet mit Timer2}
+                  end;
+       Taste_F9 : begin
+                   Slow_Key;
+                   Fct.B.Fct :=  Fct_Wr_Sw1;
+                   Mil.Wr (SW_Minus , Fct, MilErr);
+                   SW_Act := SW_Minus;
+                   SW_Valid := True;
+                   Ini_Err_Win;
+                   Write('SW  -2.5000 [Volt]   ', Hex_Word(SW_Minus),' [Hex]');
+                   Mil.Timer2_Wait(Wait_Time);          { Wartet mit Timer2}
+                  end;
+       Taste_F10: begin
+                   Slow_Key;
+                   Mil_Ask_Ifc;
+                   Fct.B.Adr := Ifc_Test_Nr;
+                   Ini_Stat_Win;
+                   Write(Stat_Line);
+                   Ch := ' ';
+                  end; {Taste_F10}
+       Taste_F11: begin
+                    If Loop_Wait = Loop_Wait1 then Loop_Wait := Loop_Wait2
+                    else
+                     Loop_Wait := Loop_Wait1;
+                  end; {Taste_F11}
+       Taste_F12: begin
+                   Slow_Key;
+                   Stat_Valid := False;  {Noch kein Status gelesen}
+                   Ini_Stat_Ary;         {Init Status-Error-Bits und Status-Old-Arrray}
+                   {Akt. Interl-Zustand als Referenz fÅr énderungsÅberwachg}
+                   Err_Stat_Intrl := False;
+                   Fct.B.Adr := Ifc_Test_Nr;
+                   Fct.B.Fct := Fct_Rd_Status;
+                   Mil.Rd (Read_Data, Fct, MilErr);
+                   if BitTst (Read_Data, 12) then
+                     Interl_Old := False     {Kein Interlock!!}
+                    else
+                     Interl_Old := True;     {Interlock!!}
+                  end; {Taste_F10}
+      end;  {Case}
+
+     case Tab_Nr of
+       1 : Status_Tab1  (Spalte_Start, Zeile_Start);
+       2 : Status_Tab2  (Spalte_Start, Zeile_Start);
+       3 : Status_Tab3  (Spalte_Start, Zeile_Start);
+       4 : Status_Tab4  (Spalte_Start, Zeile_Start);
+       5 : Status_Tab5  (Spalte_Start, Zeile_Start);
+       6 : Status_Tab6  (Spalte_Start, Zeile_Start);
+       7 : Status_Tab7  (Spalte_Start, Zeile_Start);
+       8 : Status_Tab8  (Spalte_Start, Zeile_Start);
+       9 : Status_Tab9  (Spalte_Start, Zeile_Start);
+      $A : Status_Tab0A (Spalte_Start, Zeile_Start);
+      $B : Status_Tab0B (Spalte_Start, Zeile_Start);
+     end;
+     Ini_Msg_Win;
+     Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende mit [X]');
+    end; {if Ch = #0 }
+
+{   if KeyEpressed then Ch := NewReadKey;  }
+ until Ch in ['x','X'];
+ 99:
+ end; {Mil_Stat_Tabelle}
+
+{xxx}
+procedure Write_Real_200A_Bipol (Data: Word); {200A Endwert: Write_Real_10V_Bipol (Wr_Data);}
+var Real_Zahl : Real;
+    Int_Zahl  : Integer;
+    Vorzeichen : Char;
+begin                        {Bit 15 ist Vorzeichen}
+  if (Data and $8000) = 0 then
+   begin     {positiv}
+{     Real_Zahl := Data * 305.1757813/1000000;  }
+      Real_Zahl := Data * 610.3515626/100000;
+
+     Vorzeichen:= '+';
+   end
+  else
+   begin     {negativ}
+     Data := (not Data) + 1;               {Zweier Komplement}
+{     Real_Zahl := Data * 305.1757813/1000000;  }
+     Real_Zahl := Data * 610.3515626/100000;
+     Vorzeichen:= '-';
+  end;
+
+  Write (Vorzeichen, Real_Zahl:7:3);
+ end;
+
+
+ procedure Set_TastHall_Win;
+  begin
+   Window(39, 20, 80, 23);
+   TextBackground(Green);
+   TextColor(Black);               {Setze Schriftfarbe}
+  end;
+
+ Procedure Mil_WrHall (Wr_Data: Word);      {Fixe Sollwerte aus Tabelle}
+  LABEL 99;
+  const
+   Tab_Index_Max = 16;
+   Sw_Fname  = 'C:\PC_MIL\IFB_MAG.TAB';   {Filename}
+
+  type
+   THallSet  = record
+                Volt : Word;
+                Gaus : Real;
+               end;
+
+   THallAry  = array [0..Tab_Index_Max] of THallSet;
+
+ const
+  HallSw: THallAry =
+  (
+  (Volt: $0000; Gaus:  0.0),
+  (Volt: $04F7; Gaus:  1.0),
+  (Volt: $0A86; Gaus:  2.0),
+  (Volt: $0FE4; Gaus:  3.0),
+  (Volt: $1544; Gaus:  4.0),
+  (Volt: $1ABA; Gaus:  5.0),
+  (Volt: $2018; Gaus:  6.0),
+  (Volt: $259C; Gaus:  7.0),
+  (Volt: $2AE6; Gaus:  8.0),
+  (Volt: $3098; Gaus:  9.0),
+  (Volt: $363B; Gaus: 10.0),
+  (Volt: $3BC5; Gaus: 11.0),
+  (Volt: $41C4; Gaus: 12.0),
+  (Volt: $47E8; Gaus: 13.0),
+  (Volt: $4EB9; Gaus: 14.0),
+  (Volt: $5676; Gaus: 15.0),
+  (Volt: $5FCD; Gaus: 16.0)
+  );
+
+ type
+   TFile_SwTab = file of THallAry;
+
+
+  var
+    error_cnt  : LONGINT;
+    MilErr : TMilErr;
+    Fct    : TFct;
+    Data_Increment : Word;
+    Tab_Index : Integer;
+    Wr_Gaus   : Real;
+    I         : Byte;
+   SwTab      : THallAry;
+   File_Ok    : Boolean;
+   SwFile     : TFile_SwTab;
+
+
+    FUNCTION Ask_Data_Hall: WORD;
+     VAR in_data : WORD;
+         Status : Boolean;
+     Begin
+      status := FALSE;
+      WHILE NOT status DO
+       Begin
+        ini_msg_win;
+        write   ('--> Bitte 4-stellige Hex-Daten eingeben: '); readln(read_str);
+        convert_to_hex (read_str,in_data,status);
+        IF NOT status THEN
+          Begin
+           ini_err_win;
+           writeln('ERROR: Sorry, USER: das war keine 4-stell. Hexzahl!!');
+          End;
+       End; {WHILE}
+      Ask_Data_Hall := in_data;
+     End; {Ask_Data}
+
+  procedure Show_Tab;
+   const Z_Offset = 5;
+   var I      : Byte;
+       Tab_SW : Word;
+   begin
+     Ini_Text_Win;
+     TextColor (Brown);
+     GotoXY(01,02);
+     Write ('*********** Sollwert-Tabelle *************');
+     GotoXY(01,03);
+     Write ('MagFeld   SW         Sollwert     Sollwert');
+     GotoXY(01,04);
+     Write (' [kG]    [Hex]        [Volt]      [Ampere]');
+     TextColor (Black);
+
+     for I := 0 to Tab_Index_Max do                        {Init fÅr Tabelle}
+      begin
+        Tab_SW :=  SwTab [I].Volt;
+        GotoXY(01,I+Z_Offset); write(SwTab [I].Gaus:5:2);
+        GotoXY(10,I+Z_Offset); write(hex_word(Tab_SW));
+        GotoXY(20,I+Z_Offset); Write_Real_10V_Bipol  (Tab_SW);
+        GotoXY(35,I+Z_Offset); Write_Real_200A_Bipol (Tab_SW);
+      end; {for}
+    Ini_Msg_Win;
+    write ('Weiter mit beliebiger Taste!!');
+    repeat until KeyEPressed;
+   end; {Show_Tab}
+
+
+ procedure Write_Mil (Data : Word; Fct: TFct; MilErr: TMilErr);
+   begin
+     Mil.Wr (Data, Fct, MilErr);
+     Set_Text_Win;
+     Transf_Cnt := Transf_Cnt+ 1;
+     GotoXY(18,11); write(transf_cnt:10);
+     GotoXY(47,11); write(hex_word(Data));
+     GotoXY(55,11); Write_Real_10V_Bipol  (Data);
+     GotoXY(68,11); Write_Real_200A_Bipol (Data);
+    end;
+
+   Begin
+{xxx}
+        {Sw-Tabelle Default-Werten fÅllen}
+  for I := 0 to Tab_Index_Max do                        {Init fÅr Tabelle}
+   begin
+     SwTab [I].Volt   := HallSw [I].Volt;
+     SwTab [I].Gaus   := HallSw [I].Gaus;
+  end;
+
+  File_Ok := False;
+  I := 0;
+  Assign (SwFile, Sw_Fname);
+  {$I-}                            {Compiler Check aus, Error selber abfangen}
+  Reset(SwFile);
+  {$I+}
+  if IoResult <> 0 then                             {PrÅfe, ob File existiert}
+    begin
+     Ini_Text_Win;
+     Ini_Err_Win;
+     Write('ERROR: Datei ',Sw_Fname,' fehlt. Nehme default Tabelle! Weiter <CR> ');
+     repeat until KeyEPressed;
+     for I := 0 to Tab_Index_Max do                        {Init fÅr Tabelle}
+      begin
+        SwTab [I].Volt   := HallSw [I].Volt;
+        SwTab [I].Gaus   := HallSw [I].Gaus;
+     end;
+    end
+   else
+    begin
+     Read (SwFile, SwTab);                   { File existiert: Lese Tabelle}
+     Close(SwFile);
+     File_Ok := True;
+    end;
+
+    Show_Tab;
+    Fct.B.Adr := Ifc_Test_Nr;
+    Fct.B.Fct := 06;
+    Ini_Text_Win;
+    Tab_Index := 0;
+
+    transf_cnt := 0;
+    error_cnt  := 0;
+    timout_wr  := 0;
+    Data_Increment := 0;
+    TextColor (Yellow);
+    GotoXY(20,02); Write('**************  Fixe Tabelle  ***************');
+    TextColor (Black);
+
+    GotoXY(15,03); Write('----- Schreibe Daten auf den MIL-BUS mit Fct-Code -----');
+    GotoXY(10,05); Write('Sollwert-Daten kînnen in definierten Inkrementen verÑndert werden. ');
+    GotoXY(05,06); Write('Die Tasten F1...F5 bestimmen Inkr-Wert, Pfeiltasten <- u. -> die Richtung.');
+    GotoXY(10,07); Write('Falls Pfeiltasten dauernd gedrÅckt werden: Wiederholtes Senden!!');
+
+    GotoXY(25,08); write  ('Function-Word (Fct + Adr): ',hex_word(Fct.W),' [H]');
+    GotoXY(6, 10); write('                                                    [VOLT]    [AMPERE]');
+    GotoXY(6, 11); write('Wr-Data-Cnt:              Write-Data[H]:                              ');
+    GotoXY(6, 12); write('                ^  ^      Gau·-Tab [kG]: ');
+
+    GotoXY(47,11); write(hex_word(wr_data));
+    GotoXY(55,11); Write_Real_10V_Bipol (Wr_Data);
+
+    GotoXY(06,14); write('Inkrement  : ');
+    GotoXY(19,14); write(Hex_Word(Data_Increment));
+
+    Set_TastHall_Win;
+    TextColor(Yellow);
+    GotoXY(01, 01); Write('F1: 1      F5 : SW 0.0  <- -> Incr neg/pos');
+    GotoXY(01, 02); Write('F2: 10     F6 :         ', chr($19),'   ', chr($18),' TAB auf/ab  ');
+    GotoXY(01, 03); Write('F3: 100    F7 : SW Hex                    ');
+    GotoXY(01, 04); Write('F4: 1.000  F10: IFC-Adr                  ');
+
+    Set_Text_Win;
+    TextColor(Brown);
+    GotoXY(39,17); write('Belegung Funktions- u. Sondertasten: ');
+    TextColor(Black);
+
+    Ch := ' ';
+    if Ch = ' ' then
+      begin
+       Ini_Msg_Win;
+       Write('Funktions- u. Sondertasten benutzen!     Ende mit [X]');
+      end;
+
+    repeat
+      Set_Text_win;
+      Transf_Cnt := Transf_Cnt+ 1;
+      GotoXY(18,11); write(transf_cnt:10);
+      Mil.Wr (Wr_Data, Fct, MilErr);
+
+      GotoXY(47,11); write(hex_word(wr_data));
+      GotoXY(55,11); Write_Real_10V_Bipol (Wr_Data);
+      Mil.Timer2_Wait(10000);
+
+     if KeyEPressed then Ch := NewReadKey;
+     if Ch = ' ' then
+       begin
+        Ini_Msg_Win;
+        Write('Funktions- u. Sondertasten benutzen!     Ende mit [X]');
+        repeat until KeyEPressed;
+       end;
+
+     if Ch = #0 then
+      begin
+        Ch := NewReadKey;
+        case ord (Ch) of
+         Taste_F1 : begin
+                     Data_Increment := 1;
+                     Set_Text_Win;
+                     GotoXY(06,14); write('Inkrment[H]: ');
+                     GotoXY(19,14); write(Hex_Word(Data_Increment));
+                    end;
+         Taste_F2 : begin
+                     Data_Increment := $10;
+                     Set_Text_Win;
+                     GotoXY(06,14); write('Inkrment[H]: ');
+                     GotoXY(19,14); write(Hex_Word(Data_Increment));
+                     end;
+         Taste_F3 : begin
+                     Data_Increment := $100;
+                     Set_Text_Win;
+                     GotoXY(06,14); write('Inkrment[H]: ');
+                     GotoXY(19,14); write(Hex_Word(Data_Increment));
+                   end;
+         Taste_F4 : begin
+                     Data_Increment := $1000;
+                     Set_Text_Win;
+                     GotoXY(06,14); write('Inkrment[H]: ');
+                     GotoXY(19,14); write(Hex_Word(Data_Increment));
+                    end;
+         Taste_F5 : begin
+                     Tab_Index := 0;
+                     Wr_Data := HallSw [Tab_Index].Volt;
+                     Set_Text_Win;
+                     Wr_Gaus := HallSw [Tab_Index].Gaus;
+                     GotoXY(47, 12); write(Wr_Gaus:5:2);
+                     Write_Mil (Wr_Data, Fct, MilErr);
+                    end;
+         Taste_F6 : begin
+                    end;
+         Taste_F7 : begin
+                     Wr_Data := Ask_Data_Hall;
+                     Set_Text_Win;
+                     GotoXY(47,11); write(hex_word(wr_data));
+                     GotoXY(55,11); Write_Real_10V_Bipol (Wr_Data);
+                     Write_Mil (Wr_Data, Fct, MilErr);
+                   end;
+        Taste_F10: begin
+                      New_Ifc_Adr;
+                      Fct.B.Adr := Ifc_Test_Nr;
+                      Set_Text_Win;
+                      GotoXY(25,08); write  ('Function-Word (Fct + Adr): ',hex_word(Fct.W),' [H]');
+                      Ini_Msg_Win;
+                      Write('Funktions- u. Sondertasten benutzen!     Ende mit [X]');
+                      repeat until KeyEPressed;
+                      Ch := ' ';
+                    end; {Taste_F10}
+
+         Taste_Pfeil_Links : begin
+                               Wr_Data := Wr_Data - Data_Increment;
+                               GotoXY(06,14); write('Inkrement  : ');
+                               GotoXY(19,14); write(Hex_Word(Data_Increment));
+                               GotoXY(47, 12); write('     ');
+                               Write_Mil (Wr_Data, Fct, MilErr);
+                              end;
+
+         Taste_Pfeil_Rechts: begin
+                              Wr_Data := Wr_Data + Data_Increment;
+                              GotoXY(06,14); write('Inkrement  : ');
+                              GotoXY(19,14); write(Hex_Word(Data_Increment));
+                              GotoXY(47, 12); write('     ');
+                              Write_Mil (Wr_Data, Fct, MilErr);
+                             end;
+         Taste_Pfeil_Auf   : begin
+                              Tab_Index := Tab_Index + 1;
+                              if Tab_Index > Tab_Index_Max then Tab_Index := Tab_Index_Max;
+                              Wr_Data := HallSw [Tab_Index].Volt;
+                              Set_Text_Win;
+                              GotoXY(01,14); ClrEol;
+                              Wr_Gaus := HallSw [Tab_Index].Gaus;
+                              GotoXY(47, 12); write(Wr_Gaus:5:2);
+                              Write_Mil (Wr_Data, Fct, MilErr);
+                             end;
+         Taste_Pfeil_Ab   : begin
+                              Tab_Index := Tab_Index - 1;
+                              if Tab_Index < 0 then  Tab_Index := 0;
+                              Wr_Data := HallSw [Tab_Index].Volt;
+                              Set_Text_Win;
+                              GotoXY(01,14); ClrEol;
+                              Wr_Gaus := HallSw [Tab_Index].Gaus;
+                              GotoXY(47, 12); write(Wr_Gaus:5:2);
+                              Write_Mil (Wr_Data, Fct, MilErr);
+                             end;
+       end;  {Case}
+
+       Ini_Msg_Win;
+       Write('Funktions- u. Sondertasten benutzen!     Ende mit [X]');
+      end; {if Ch = #0 }
+      repeat until KeyEPressed;
+      if KeyEPressed then Ch := NewReadKey;
+    until Ch in ['x','X'];
+99:
+End; {mil_wrhall}
+
+
+ function Ask_Intervall: Byte;
+  var answer : CHAR;
+      Status : Boolean;
+      Zeit   : Byte;
+  begin
+    Ini_Text_Win;
+    GotoXY(01,22); ClrEol;
+    Write('Am Ende einer Iteration kann eine Wartezeit eingefÅgt werden. 0 ergibt SÑgezahn');
+    Ini_Msg_Win;
+    Write ('Bitte Intervall-Zeit in 0,1s-Schritten eingeben [0...100]: ');
+    readln (Zeit);
+    Ask_Intervall := Zeit;
+    if not Zeit in [0..100] then
+     begin
+       status := FALSE;
+       WHILE NOT status DO
+        begin
+          Ini_Msg_Win;
+          Write ('Bitte Intervall-Zeit in 0,1s-Schritten eingeben [0...100]: ');
+          readln (Zeit);
+          IF Zeit in [0..100] THEN
+           begin
+            Ask_Intervall:= Zeit;
+            status := TRUE;
+           end;
+        end;
+     end; {if j}
+  End; {ask_ifc}
+
+ function Ask_Prozent: Byte;
+  const prozent_max = 25;
+  var answer : CHAR;
+      Status : Boolean;
+      Przent: Byte;
+  begin
+    status := FALSE;
+    Ini_Text_Win;
+    GotoXY(01,22); ClrEol;
+    Write('Bei 0-Prozent: keine Iteration --> Rampenverlauf!!');
+    Ini_Msg_Win;
+    Write ('Bitte maximale Prozent-Abweichnung vom Sollwert-Max eingeben [0..',prozent_max,']: ');
+    readln (Przent);
+    Ask_Prozent := Przent;
+    if not (Przent in [0..prozent_max]) then
+     begin
+       WHILE NOT status DO
+        begin
+         Ini_Msg_Win;
+         Write ('Bitte maximale Prozent-Abweichnung vom Sollwert-Max eingeben [');
+         TextColor (Red);
+         Write ('0..',prozent_max); TextColor (Yellow); Write (']: ');
+         readln (Przent);
+         IF Przent in [0..prozent_max] THEN
+          begin
+           status := TRUE;
+           Ask_Prozent := Przent;
+          end;
+        end;
+     end; {if j}
+  End; {ask_ifc}
+
+
+ Procedure Mil_WrHall_Var (Wr_Data: Word);
+  LABEL 99;
+  const
+   Tab_Index_Max = 16;
+   Sw_Fname  = 'C:\PC_MIL\IFB_MAG.TAB';   {Filename}
+   TimeIndex = 10000;
+   Step_Time = 30;     {Wartezeit fÅr nÑchsten Sollwert * 10 us}
+
+  type
+   THallSet  = record
+                Volt : Word;
+                Gaus : Real;
+               end;
+
+   THallAry  = array [0..Tab_Index_Max] of THallSet;
+   TFile_SwTab = file of THallAry;
+
+ const
+  HallSw: THallAry =
+  (
+  (Volt: $0000; Gaus:  0.0),
+  (Volt: $04F7; Gaus:  1.0),
+  (Volt: $0A86; Gaus:  2.0),
+  (Volt: $0FE4; Gaus:  3.0),
+  (Volt: $1544; Gaus:  4.0),
+  (Volt: $1ABA; Gaus:  5.0),
+  (Volt: $2018; Gaus:  6.0),
+  (Volt: $259C; Gaus:  7.0),
+  (Volt: $2AE6; Gaus:  8.0),
+  (Volt: $3098; Gaus:  9.0),
+  (Volt: $363B; Gaus: 10.0),
+  (Volt: $3BC5; Gaus: 11.0),
+  (Volt: $41C4; Gaus: 12.0),
+  (Volt: $47E8; Gaus: 13.0),
+  (Volt: $4EB9; Gaus: 14.0),
+  (Volt: $5676; Gaus: 15.0),
+  (Volt: $5FCD; Gaus: 16.0)
+  );
+
+  var
+   SwTab      : THallAry;
+   SwFile     : TFile_SwTab;
+   I          : Byte;
+   Loop       : Boolean;
+   Intervall  : LongInt;
+   Prozent    : Byte;
+   error_cnt  : LONGINT;
+   MilErr     : TMilErr;
+   Fct        : TFct;
+   Data_Increment : Word;
+   Tab_Index  : Integer;
+   Wr_Gaus    : Real;
+   File_Ok    : Boolean;
+   SW_Top     : Word;
+   SW_Old     : Word;       {Dient als globaler Sollwert-Speicher fÅr procedure
+                             Mil_WrSoft}
+
+
+    FUNCTION Ask_SW_Top: WORD;
+     VAR in_data : WORD;
+         Status : Boolean;
+     Begin
+      Ini_Text_Win;
+      GotoXY(01,22); ClrEol;
+      Write('Bitte TOP-Sollwert fÅr als Grundlage der %-Berechnung eingeben!');
+
+      status := FALSE;
+      WHILE NOT status DO
+       Begin
+        ini_msg_win;
+        write   ('--> Bitte 4-stellige Hex-Daten eingeben: '); readln(read_str);
+        convert_to_hex (read_str,in_data,status);
+        IF NOT status THEN
+          Begin
+           ini_err_win;
+           writeln('ERROR: Sorry, USER: das war keine 4-stell. Hexzahl!!');
+          End;
+       End; {WHILE}
+      Ask_SW_Top := in_data;
+     End; {Ask_Data}
+
+
+
+    FUNCTION Ask_Data_Hall: WORD;
+     VAR in_data : WORD;
+         Status : Boolean;
+     Begin
+      status := FALSE;
+      WHILE NOT status DO
+       Begin
+        ini_msg_win;
+        write   ('--> Bitte 4-stellige Hex-Daten eingeben: '); readln(read_str);
+        convert_to_hex (read_str,in_data,status);
+        IF NOT status THEN
+          Begin
+           ini_err_win;
+           writeln('ERROR: Sorry, USER: das war keine 4-stell. Hexzahl!!');
+          End;
+       End; {WHILE}
+      Ask_Data_Hall := in_data;
+     End; {Ask_Data}
+
+  procedure Show_Tab;
+   const Z_Offset = 5;
+   var I      : Byte;
+       Tab_SW : Word;
+   begin
+     Ini_Text_Win;
+     TextColor (Brown);
+     GotoXY(01,02);
+     Write ('*********** Sollwert-Tabelle *************');
+     GotoXY(01,03);
+     Write ('MagFeld   SW         Sollwert     Sollwert');
+     GotoXY(01,04);
+     Write (' [kG]    [Hex]        [Volt]      [Ampere]');
+     TextColor (Black);
+
+     for I := 0 to Tab_Index_Max do                        {Init fÅr Tabelle}
+      begin
+        Tab_SW :=  SwTab [I].Volt;
+        GotoXY(01,I+Z_Offset); write(SwTab [I].Gaus:5:2);
+        GotoXY(10,I+Z_Offset); write(hex_word(Tab_SW));
+        GotoXY(20,I+Z_Offset); Write_Real_10V_Bipol  (Tab_SW);
+        GotoXY(35,I+Z_Offset); Write_Real_200A_Bipol (Tab_SW);
+      end; {for}
+    Ini_Msg_Win;
+    write ('Weiter mit beliebiger Taste!!');
+    repeat until KeyEPressed;
+   end; {Show_Tab}
+
+
+  procedure Mil_WrSoft (SW_New: Word; SoftFct: TFct; MilErr: TMilErr);
+   {
+    Diese Routine fÑhrt zu einem neuen Sollwert nur in definierten Schritten. bis der
+    Dazu mu· der letzte Sollwert gespeichert werden!
+   }
+   var SW_New_Int : Integer;
+       SW_Old_Int : Integer;
+   begin
+     SW_New_Int := SW_New;
+     SW_Old_Int := SW_Old;
+     while SW_New_Int <> SW_Old_Int do
+      begin
+        if SW_New_Int > SW_Old_Int  then SW_Old_Int := SW_Old_Int + 1;
+        if SW_New_Int < SW_Old_Int  then SW_Old_Int := SW_Old_Int - 1;
+        Mil.Wr (SW_Old_Int, SoftFct, MilErr);
+        Set_Text_Win;
+        Transf_Cnt := Transf_Cnt+ 1;
+        GotoXY(18,11); write(transf_cnt:10);
+        GotoXY(47,11); write(hex_word(SW_Old_Int));
+        GotoXY(55,11); Write_Real_10V_Bipol  (SW_Old_Int);
+        GotoXY(68,11); Write_Real_200A_Bipol (SW_Old_Int);
+        Mil.Timer2_Wait(Step_Time);
+      end; {while}
+     SW_Old := SW_Old_Int;       {Rette den alten Sollwert}
+   end; {Mil_WrSoft}
+
+  procedure WrSW_Spezial (SW: Real; SW_Max: Real; Delta: Integer);
+   {FÅr Magnetsonden-Messungen ist es gewÅnscht, einen Sollwert iterativ
+    zu schreiben: z. B. SW +5% vom MaxWert, -5%; +2,5%; -2,5%; +1%; -1%
+    und zulezt den eigentlichen Sollwert SW}
+   var SW_Real : Real;
+       SW_Int  : Integer;
+       Test_Intervall : LongInt;
+   begin
+     Test_Intervall := Intervall * TimeIndex;
+     {Lt. Werkmann: Vor Iteration erst Vollausschlag, anschlie·end Null}
+     Mil_WrSoft  (SW_Top, Fct, MilErr);   {+ Vollausschlag}
+     Mil.Timer2_Wait (Test_Intervall);
+
+     Mil_WrSoft  ($0000, Fct, MilErr);   {Null}
+     Mil.Timer2_Wait (Test_Intervall);
+
+     {Beginn der Iteration}
+     { 1. Wert: Sollwert := Sollwert + (Delta % * Sollwert_Max) }
+     SW_Real := (SW_Max * Delta)/100;  {DeltaProzent vom Max_Wert}
+     SW_Real := SW + SW_Real;          {Sollwert + DeltaProzent vom Maxwert}
+     SW_Int  := Round (SW_Real);       {Real in Integer umwandeln}
+     Mil_WrSoft  (SW_Int, Fct, MilErr);     {Mil.Wr}
+     Mil.Timer2_Wait (Test_Intervall);
+
+     { 2. Wert: Sollwert := Sollwert - (Delta % * Sollwert_Max) }
+     SW_Real := (SW_Max * Delta)/100;  {DeltaProzent vom Max_Wert}
+     SW_Real := SW - SW_Real;          {Sollwert + DeltaProzent vom Maxwert}
+     SW_Int  := Round (SW_Real);       {Real in Integer umwandeln}
+     Mil_WrSoft  (SW_Int, Fct, MilErr);     {Mil.Wr}
+     Mil.Timer2_Wait(Test_Intervall);
+
+     { 3. Wert: Sollwert := Sollwert + (Delta/2 % * Sollwert_Max) }
+     SW_Real := (SW_Max * Delta/2)/100;  {DeltaProzent vom Max_Wert}
+     SW_Real := SW + SW_Real;          {Sollwert + DeltaProzent vom Maxwert}
+     SW_Int  := Round (SW_Real);       {Real in Integer umwandeln}
+     Mil_WrSoft  (SW_Int, Fct, MilErr);     {Mil.Wr }
+     Mil.Timer2_Wait(Test_Intervall);
+
+     { 4. Wert: Sollwert := Sollwert - (Delta/2 % * Sollwert_Max) }
+     SW_Real := (SW_Max * Delta/2)/100;  {DeltaProzent vom Max_Wert}
+     SW_Real := SW - SW_Real;          {Sollwert + DeltaProzent vom Maxwert}
+     SW_Int  := Round (SW_Real);       {Real in Integer umwandeln}
+     Mil_WrSoft  (SW_Int, Fct, MilErr);     {Mil.Wr}
+     Mil.Timer2_Wait(Test_Intervall);
+
+     { 5. Wert: Sollwert := Sollwert + (Delta/4 % * Sollwert_Max) }
+     SW_Real := (SW_Max * Delta/4)/100;  {DeltaProzent vom Max_Wert}
+     SW_Real := SW + SW_Real;          {Sollwert + DeltaProzent vom Maxwert}
+     SW_Int  := Round (SW_Real);       {Real in Integer umwandeln}
+     Mil_WrSoft  (SW_Int, Fct, MilErr);     {Mil.Wr}
+     Mil.Timer2_Wait(Test_Intervall);
+
+     { 6. Wert: Sollwert := Sollwert - (Delta/4 % * Sollwert_Max) }
+     SW_Real := (SW_Max * Delta/4)/100;  {DeltaProzent vom Max_Wert}
+     SW_Real := SW - SW_Real;          {Sollwert + DeltaProzent vom Maxwert}
+     SW_Int  := Round (SW_Real);       {Real in Integer umwandeln}
+     Mil_WrSoft  (SW_Int, Fct, MilErr);     {Mil.Wr}
+     Mil.Timer2_Wait(Test_Intervall);
+
+     { 7. Wert: Sollwert }
+     SW_Real := SW;
+     SW_Int  := Round (SW_Real);       {Real in Integer umwandeln}
+     Mil_WrSoft  (SW_Int, Fct, MilErr);         {Mil.Wr}
+     Mil.Timer2_Wait(Test_Intervall);
+   end;  {WrSW_Spezial}
+
+ Begin
+        {Sw-Tabelle Default-Werten fÅllen}
+  for I := 0 to Tab_Index_Max do                        {Init fÅr Tabelle}
+   begin
+     SwTab [I].Volt   := HallSw [I].Volt;
+     SwTab [I].Gaus   := HallSw [I].Gaus;
+  end;
+
+  File_Ok := False;
+  I := 0;
+  Assign (SwFile, Sw_Fname);
+  {$I-}                            {Compiler Check aus, Error selber abfangen}
+  Reset(SwFile);
+  {$I+}
+  if IoResult <> 0 then                             {PrÅfe, ob File existiert}
+    begin
+     Ini_Text_Win;
+     Ini_Err_Win;
+     Write('ERROR: Datei ',Sw_Fname,' fehlt. Default Datei anlegen? [J/N]: ');
+     if ReadKey in ['j','J'] then
+      begin
+        for I := 0 to Tab_Index_Max do                        {Init fÅr Tabelle}
+         begin
+           SwTab [I].Volt   := HallSw [I].Volt;
+           SwTab [I].Gaus   := HallSw [I].Gaus;
+        end;
+        ReWrite(SwFile);                        {existiert nicht: File erzeugen}
+        Write(SwFile,SwTab);                   {Tabelle in File speichern}
+        Close(SwFile);
+        File_Ok := True;
+       end; {if j}
+    end
+   else
+    begin
+     Read (SwFile, SwTab);                   { File existiert: Lese Tabelle}
+     Close(SwFile);
+     File_Ok := True;
+    end;
+
+    SW_Top    := Ask_SW_Top;       {Grundlage f. Prozentuale öberschwinger (Iteration) }
+    Intervall := Ask_Intervall;    {Wartezeit beim Rauf- u. Runterfahren}
+    Prozent   := Ask_Prozent;      {wird vom SW-Top berechnet}
+
+    Fct.B.Adr := Ifc_Test_Nr;
+    Fct.B.Fct := 06;
+    Loop      := False;
+    Ini_Text_Win;
+    Tab_Index  := 0;
+    SW_Old     := 0;
+    transf_cnt := 0;
+    error_cnt  := 0;
+    timout_wr  := 0;
+    Data_Increment := 0;
+
+    Show_Tab;
+
+    Ini_Text_Win;
+    TextColor (Yellow);
+    GotoXY(20,02); Write('**************  Variable Tabelle  ***************');
+    TextColor (Black);
+    GotoXY(15,03); Write('----- Schreibe Daten auf den MIL-BUS mit Fct-Code -----');
+    GotoXY(10,04); Write('Sollwert-Daten kînnen in definierten Inkrementen verÑndert werden. ');
+    GotoXY(05,05); Write('Die Tasten F1...F4 bestimmen Inkr-Wert, Pfeiltasten <- u. -> die Richtung.');
+    GotoXY(10,06); Write('Falls Pfeiltasten dauernd gedrÅckt werden: Wiederholtes Senden!!');
+    GotoXY(04,07); Write('TabWerte iterativ mit (+/-) 1x % SW_TOP, (+/-) 1/2x, (+/-) 1/4x anfahren');
+    TextColor (Red);
+    GotoXY(05,08); Write('Bei TabWerten zuerst SW_TOP [', hex_word (SW_Top),']  dann [0000]; anschlie·end Iteration');
+
+
+    Textcolor (Black);
+    GotoXY(25,09); write  ('Function-Word (Fct + Adr): ',hex_word(Fct.W),' [H]');
+    GotoXY(6, 10); write('                                                    [VOLT]     [AMPERE]');
+    GotoXY(6, 11); write('Wr-Data-Cnt:              Write-Data[H]:                    ',chr($F7),'         ');
+    GotoXY(6, 12); write('                ^  ^      Gau·-Tab [kG]: ');
+
+    GotoXY(47,11); write(hex_word(wr_data));
+    GotoXY(55,11); Write_Real_10V_Bipol (Wr_Data);
+
+    GotoXY(06,14); write('Inkrment[H]: ');
+    GotoXY(19,14); write(Hex_Word(Data_Increment));
+
+    GotoXY(06,16); write('Zeit x 0.1s : ');
+    GotoXY(20,16); write(Intervall:3);
+    GotoXY(06,17); write(chr($25),' v. TOPwert: ');
+    GotoXY(20,17); write(Prozent:3);
+    GotoXY(06,18); write('Rampe x us  : ');
+    GotoXY(20,18); write(Step_Time * 10);
+
+    Set_TastHall_Win;
+    TextColor(Yellow);
+    GotoXY(01, 01); Write('F1: 1      F5 : SW 0.0  F11:  SW iterativ ');
+    GotoXY(01, 02); Write('F2: 10     F6 : SW Tab  F12:  TAB   Ñndern');
+    GotoXY(01, 03); Write('F3: 100    F7 : SW Hex  <- -> Incr neg/pos');
+    GotoXY(01, 04); Write('F4: 1000   F10: IfcAdr  ', chr($19),'   ', chr($18),' TAB auf/ab ');
+
+    Set_Text_Win;
+    TextColor(Brown);
+    GotoXY(39,17); write('Belegung Funktions- u. Sondertasten: ');
+    TextColor(Black);
+
+    Mil.Reset;                            { clear fifo }
+    Ch := ' ';
+    if Ch = ' ' then
+      begin
+       Ini_Msg_Win;
+       Write('Funktions- u. Sondertasten benutzen!     Ende mit [X]');
+      end;
+
+    repeat
+     if KeyEPressed then Ch := NewReadKey;
+     if Ch = ' ' then
+       begin
+        Ini_Msg_Win;
+        Write('Funktions- u. Sondertasten benutzen!     Ende mit [X]');
+        repeat until KeyEPressed;
+       end;
+
+     if Ch = #0 then
+      begin
+        Ch := NewReadKey;
+        case ord (Ch) of
+         Taste_F1 : begin
+                     Data_Increment := 1;
+                     Set_Text_Win;
+                     GotoXY(06,14); write('Inkrment[H]: ');
+                     GotoXY(19,14); write(Hex_Word(Data_Increment));
+                    end;
+         Taste_F2 : begin
+                     Data_Increment := $10;
+                     Set_Text_Win;
+                     GotoXY(06,14); write('Inkrment[H]: ');
+                     GotoXY(19,14); write(Hex_Word(Data_Increment));
+                    end;
+         Taste_F3 : begin
+                     Data_Increment := $100;
+                     Set_Text_Win;
+                     GotoXY(19,14); write(Hex_Word(Data_Increment));
+                     GotoXY(06,14); write('Inkrment[H]: ');
+                   end;
+         Taste_F4 : begin
+                     Data_Increment := $1000;
+                     Set_Text_Win;
+                     GotoXY(06,14); write('Inkrment[H]: ');
+                     GotoXY(19,14); write(Hex_Word(Data_Increment));
+                    end;
+         Taste_F5 : begin
+                     Tab_Index := 0;
+                     Wr_Data := HallSw [Tab_Index].Volt;
+                     Set_Text_Win;
+                     Wr_Gaus := HallSw [Tab_Index].Gaus;
+                     GotoXY(47, 12); write(Wr_Gaus:5:2);
+                     Mil_WrSoft  (Wr_Data, Fct, MilErr);   {Mil.Wr}
+                    end;
+         Taste_F6 : begin
+                      Wr_Data := SwTab [Tab_Index].Volt;
+                      Set_Text_Win;
+                      GotoXY(01,14); ClrEol;
+                      Wr_Gaus := SwTab [Tab_Index].Gaus;
+                      GotoXY(47, 12); write(Wr_Gaus:5:2);
+                      WrSW_Spezial (Wr_Data, SW_Top, Prozent);
+                    end;
+         Taste_F7 : begin
+                     Wr_Data := Ask_Data_Hall;
+                     Set_Text_Win;
+                     GotoXY(47, 12); ClrEol;
+                     Ini_Msg_Win;
+                     Write('Funktions- u. Sondertasten benutzen!     Ende mit [X]');
+                     Mil_WrSoft  (Wr_Data, Fct, MilErr);   {Mil.Wr}
+                   end;
+        Taste_F10: begin
+                      New_Ifc_Adr;
+                      Fct.B.Adr := Ifc_Test_Nr;
+                      Set_Text_Win;
+                      GotoXY(25,09); write  ('Function-Word (Fct + Adr): ',hex_word(Fct.W),' [H]');
+                      Ini_Msg_Win;
+                      Write('Funktions- u. Sondertasten benutzen!     Ende mit [X]');
+                      repeat until KeyEPressed;
+                   end; {Taste_F10}
+
+        Taste_F11: begin   {aktuelle Wr-Daten nochmals iterativ schreiben}
+                     WrSW_Spezial (Wr_Data, SW_Top, Prozent);
+                   end; {Taste_F10}
+        Taste_F12: begin
+                      Reset(SwFile);
+                      SwTab [Tab_Index].Volt := Wr_Data;
+                      Write(SwFile,SwTab);                   {Tabelle in File speichern}
+                      Close(SwFile);
+                   end; {Taste_F10}
+        Taste_Pfeil_Links : begin
+                               Wr_Data := Wr_Data - Data_Increment;
+                               Set_Text_win;
+                               GotoXY(06,14); write('Inkrement  : ');
+                               GotoXY(19,14); write(Hex_Word(Data_Increment));
+                               Mil_WrSoft  (Wr_Data, Fct, MilErr);  {Mil.Wr}
+                             end;
+
+         Taste_Pfeil_Rechts: begin
+                              Wr_Data := Wr_Data + Data_Increment;
+                              Set_Text_win;
+                              GotoXY(06,14); write('Inkrement  : ');
+                              GotoXY(19,14); write(Hex_Word(Data_Increment));
+                              Mil_WrSoft  (Wr_Data, Fct, MilErr);   {Mil.Wr}
+                             end;
+         Taste_Pfeil_Auf   : begin
+                              Tab_Index := Tab_Index + 1;
+                              if Tab_Index > Tab_Index_Max then Tab_Index := Tab_Index_Max;
+                              Set_Text_Win;
+                              Wr_Gaus := SwTab [Tab_Index].Gaus;
+                              GotoXY(47, 12); write(Wr_Gaus:5:2);
+                             end;
+         Taste_Pfeil_Ab   : begin
+                              Tab_Index := Tab_Index - 1;
+                              if Tab_Index < 0 then  Tab_Index := 0;
+                              Set_Text_Win;
+                              Wr_Gaus := SwTab [Tab_Index].Gaus;
+                              GotoXY(47, 12); write(Wr_Gaus:5:2);
+                             end;
+       end;  {Case}
+
+       Ini_Msg_Win;
+       Write('Funktions- u. Sondertasten benutzen!     Ende mit [X]');
+      end; {if Ch = #0 }
+      repeat until KeyEPressed;
+      if KeyEPressed then Ch := NewReadKey;
+    until Ch in ['x','X'];
+
+    99:
+End; {Mil_WrHall_Var}
+
+
+{xxx}
+ procedure Mil_SW_IW;
+ label 99;
+ const Tab_Index_Max = 40;
+ type
+  TSW_Ary  = array [0..Tab_Index_Max] of Real;
+
+ const Z_Base = 10;
+       S_SW   = 22;
+       S_IW1  = 45;
+       S_IW2  = 63;
+
+       SW_Tab : TSW_Ary =
+       (-10.0,
+         -9.5, -9.0, -8.5, -8.0,  -7.5, -7.0, -6.5, -6.0, -5.5, -5.0,
+         -4.5, -4.0, -3.5, -3.0,  -2.5, -2.0, -1.5, -1.0, -0.5,  0.0,
+          0.5,  1.0,  1.5,  2.0,   2.5,  3.0,  3.5,  4.0,  4.5,  5.0,
+          5.5,  6.0,  6.5,  7.0,   7.5,  8.0,  8.5,  9.0,  9.5, 10.0
+       );
+ var
+   MilErr     : TMilErr;
+   Fct        : TFct;
+   Sonder_Zeichen : Char;
+   Bit16_Str  : Str19 ;
+   Shift_Mode : Boolean;
+   Plus       : Boolean;
+   Tab_Index  : Integer;
+   Real_Data  : Real;
+   IW1        : Word;
+   IW2        : Word;
+   SW_Act     : Integer;
+   Rd_Cnt     : LongInt;
+
+ procedure Set_SW_Win;
+  begin
+   Window(42, 20, 80, 23);
+   TextBackground(Green);
+   TextColor(Black);
+  end;
+
+  procedure Show_Int_Data (I_Data: Integer);
+   begin
+     GotoXY(18,Z_Base-2); write(Transf_Cnt:10);
+     GotoXY(S_SW+2,Z_Base+1); Writeln(hex_word(I_Data));
+     GotoXY(S_SW-2,Z_Base+2); Write_Real_10V_Bipol (I_Data);
+     Hex_Bin_Str (I_Data, Bit16_Str);
+     GotoXY(S_SW-5,Z_Base+5); Write(Bit16_Str);
+   end;
+
+ procedure Write_SW (SW_Data: Word);
+  begin
+   Set_Text_Win;
+   Transf_Cnt:= Transf_Cnt + 1;
+   Show_Int_Data (SW_Data);
+   Fct.B.Fct := Fct_Wr_Sw1;
+   Mil.Wr (SW_Data, Fct, MilErr);
+  end;
+
+
+ begin
+   Mil_Ask_Ifc;
+   Plus      := True;
+   Shift_Mode:= False;
+   Tab_Index := 20;
+   Transf_Cnt:= 0;
+   Rd_Cnt    := 0;
+
+   Fct.B.Adr := Ifc_Test_Nr;
+   Fct.B.Fct := Fct_Wr_Sw1;
+   Sonder_Zeichen := chr(124);  {Absolut Zeichen}
+
+   Ini_Text_Win;
+   GotoXY(15,01); Write('----- Schreibe Sollwert-Daten auf den MIL-BUS -----');
+   GotoXY(15,03); Write('Sollwert-Daten kînnen auf drei Arten festgelegt werden: ');
+   GotoXY(04,04); Write(' - aus einer Tabelle fester Werte mit den Pfeiltasten ',chr($19),' ',chr($18),' oder  ');
+   GotoXY(04,05); Write(' - durch Bitschieben    (F1) und anschlie·end  <-- -->    oder ');
+   GotoXY(04,06); Write(' - als Inkremente +/- 1 (F2) zum aktuellen Wert mit den Pfeiltasten <-- -->');
+
+   GotoXY(02,Z_Base-2); write('Wr-Data-Cnt: ');
+   GotoXY(18,Z_Base-2); write(Transf_Cnt:10);
+
+   GotoXY(32,Z_Base-2); write('Rd-Data-Cnt: ');
+   GotoXY(48,Z_Base-2); write(Rd_Cnt:10);
+
+   TextColor (Brown);
+   GotoXY(02,Z_Base);   write('IFK-Adr [H]: ');
+   GotoXY(S_SW,Z_Base);   write('SW [06H]');
+   GotoXY(S_IW1,Z_Base);  write('IW1 [81H]');
+   GotoXY(S_IW2,Z_Base);  write('IW2 [82H]');
+   TextColor (Black);
+
+   GotoXY(02,Z_Base+1); write('[Hex]      :');
+   GotoXY(02,Z_Base+2); write('[Volt]     :');
+   GotoXY(02,Z_Base+3); Write (Sonder_Zeichen);  Write ('Hex-Diff');
+                        Write (Sonder_Zeichen);  Write (' : '); ClrEol;
+
+   GotoXY(02,Z_Base+5); writeln('Data[BIN]  : ');
+   GotoXY(17,Z_Base+6); write('MSB             LSB');
+   GotoXY(40,Z_Base+6); write('MSB             LSB');
+
+   TextColor (Brown);
+   GotoXY(02,20); Write('Tab-Index [',Tab_index_Max,']: ');
+   GotoXY(02,21); Write('Mode          : ');
+   TextColor (Black);
+
+   GotoXY(18,20); Write (Tab_Index:2);
+   GotoXY(18,21);
+   if Shift_Mode then Write ('Shift-Mode') else Write ('Incr-Mode ');
+
+   Write_Data := 0;
+   GotoXY(15,Z_Base);       Write(Hex_Byte (Ifc_Test_Nr));;
+   GotoXY(S_SW+2,Z_Base+1); Writeln(hex_word(Write_Data));
+   GotoXY(S_SW-2,Z_Base+2); Write_Real_10V_Bipol (Write_Data);
+   Hex_Bin_Str (Write_Data, Bit16_Str);
+   GotoXY(S_SW-5,Z_Base+5); Write(Bit16_Str);
+
+   Set_Text_Win;
+   TextColor(Brown);
+   GotoXY(42,17); write('Belegung Funktions- u. Sondertasten: ');
+   Set_SW_Win;
+   TextColor(Yellow);
+   GotoXY(01, 01); Write('F1: SW Bit-Shift   F5 :  SW 0.0       ');
+   GotoXY(01, 02); Write('F2: SW Increment   F10:  IfcAdr       ');
+   GotoXY(01, 03); Write('F3: SW Plus        <- -> Shift  / Incr');
+   GotoXY(01, 04); Write('F4: SW Minus       ', chr($19),'   ', chr($18),' SW-TAB       ');
+   TextColor(Black);
+
+   Ch := ' ';
+   if Ch = ' ' then
+     begin
+      Ini_Msg_Win;
+      Write('Step/Stop <Space>, Loop <CR>, Funkt.- u. Sondertasten benutzen!   Ende mit [X]');
+     end;
+
+   repeat
+    Set_Text_Win;
+    Fct.B.Fct := Fct_Rd_Ist1;
+    Mil.Rd (IW1, Fct, MilErr);   {Lese Istwert}
+    if MilErr = No_Err then
+     begin
+       Rd_Cnt := Rd_Cnt+1;
+       GotoXY(48,Z_Base-2); write(Rd_Cnt:10);
+
+       Fct.B.Fct := Fct_Rd_Ist2;
+       Mil.Rd (IW2, Fct, MilErr);   {Lese Istwert}
+       GotoXY(S_IW1+2,Z_Base+1);  Write (Hex_Word(IW1));
+       GotoXY(S_IW2+2,Z_Base+1);  Write (Hex_Word(IW2));
+       GotoXY(S_IW1-2,Z_Base+2);  Write_Real_10V_Bipol (IW1);
+       GotoXY(S_IW2-2,Z_Base+2);  Write_Real_10V_Bipol (IW2);
+       Hex_Bin_Str (IW1, Bit16_Str);
+       GotoXY(S_IW1-5,Z_Base+5); Write(Bit16_Str);
+
+       GotoXY(S_IW1+2,Z_Base+3);   {Differenz SW IW1}
+       SW_Act := Write_Data;
+         if IW1 >  SW_Act then  Write (Hex_Word (IW1 - SW_Act));
+         if IW1 <  SW_Act then  Write (Hex_Word (SW_Act - IW1));
+         if IW1 =  SW_Act then  Write (Hex_Word (0));
+
+       GotoXY(S_IW2+2,Z_Base+3);   {Differenz SW IW2}
+         if IW2 >  SW_Act then  Write (Hex_Word (IW2 - SW_Act));
+         if IW2 <  SW_Act then  Write (Hex_Word (SW_Act - IW2));
+         if IW2 =  SW_Act then  Write (Hex_Word (0));
+     end   {no error}
+    else
+     begin
+       GotoXY(S_IW1+2,Z_Base+1);  Write ('    ');
+       GotoXY(S_IW2+2,Z_Base+1);  Write ('    ');
+       GotoXY(S_IW1-2,Z_Base+2);  Write ('          ');
+       GotoXY(S_IW2-2,Z_Base+2);  Write ('          ');
+       GotoXY(S_IW1-5,Z_Base+5);  Write ('                   ');
+       GotoXY(S_IW1+2,Z_Base+3);  Write ('    ');
+       GotoXY(S_IW2+2,Z_Base+3);  Write ('    ');
+     end;
+
+    if KeyEPressed then Ch := NewReadKey;
+    if Ch = ' ' then
+      begin
+       Ini_Msg_Win;
+       Write('Step/Stop <Space>, Loop <CR>, Funkt.- u. Sondertasten benutzen!   Ende mit [X]');
+       repeat until KeyEPressed;
+      end;
+
+    if Ch = #0 then
+     begin
+       Ch := NewReadKey;
+       case ord (Ch) of
+       Taste_F1 : begin
+                   Set_Text_Win;
+                   Shift_Mode := True;
+                   GotoXY(18,21);
+                   Write ('Shift-Mode');
+                  end;
+       Taste_F2 : begin
+                   Set_Text_Win;
+                   Shift_Mode := False;
+                   GotoXY(18,21);
+                   Write ('Incr-Mode ');
+                  end;
+       Taste_F3 : begin
+                    Plus := True;
+                    Write_Data := Write_Data and $7FFF;
+                    Show_Int_Data (Write_Data);
+                  end;
+       Taste_F4 : begin
+                    Plus := False;
+                    Write_Data := Write_Data or $8000;
+                    Show_Int_Data (Write_Data);
+                  end;
+       Taste_F5 : begin
+                   Write_Data := 0;
+                   Tab_Index := 20;
+                   Set_Text_Win;
+                   GotoXY(18,20); Write (Tab_Index:2);
+                   Write_SW (Write_Data);
+                  end;
+       Taste_F10: begin
+                     New_Ifc_Adr;
+                     Fct.B.Adr := Ifc_Test_Nr;
+                     Set_Text_Win;
+                     GotoXY(15,Z_Base); Write(Hex_Byte (Ifc_Test_Nr));;
+                     Ini_Msg_Win;
+                     Write('Step/Stop <Space>, Loop <CR>, Funkt.- u. Sondertasten benutzen!   Ende mit [X]');
+                     repeat until KeyEPressed;
+                  end; {Taste_F10}
+
+       Taste_Pfeil_Links : begin
+                            if Shift_Mode then
+                              begin
+                                if Plus then
+                                 begin
+                                   if Write_Data = $0000 then Write_Data := $1
+                                   else Write_Data := Write_Data shl 1;
+                                 end
+                                else  {minus}
+                                 begin
+                                   Write_Data := Write_Data and $7FFF;
+                                   if Write_Data = $0000 then Write_Data := 1
+                                   else Write_Data:= Write_Data shl 1;
+                                   Write_Data := Write_Data or $8000;
+                                 end;
+                              end {if Shift-Mode}
+                             else
+                              begin   {Increment-Mode}
+                                Write_Data := Write_Data - 1;
+                              end;
+                             Write_SW (Write_Data);
+                           end;  {Taste_Pfeil_Links}
+        Taste_Pfeil_Rechts: begin
+                             if Shift_Mode then
+                               begin
+                                if Plus then
+                                 begin
+                                   if Write_Data = $0000 then Write_Data := $8000
+                                   else Write_Data := Write_Data shr 1;
+                                 end
+                                else  {minus}
+                                 begin
+                                   Write_Data := Write_Data and $7FFF;
+                                   if Write_Data = $0000 then Write_Data := $8000;
+                                   Write_Data:= Write_Data shr 1;
+                                   Write_Data := Write_Data or $8000;
+                                 end;
+                               end {if Shift-Mode}
+                             else
+                               begin   {Increment-Mode}
+                                 Write_Data := Write_Data + 1;
+                               end;
+                              Write_SW (Write_Data);
+                         end;  {Taste_Pfeil_Rechts}
+        Taste_Pfeil_Auf   : begin
+                             Tab_Index := Tab_Index + 1;
+                             if Tab_Index > Tab_Index_Max then Tab_Index := Tab_Index_Max;
+                             Real_Data := SW_Tab[Tab_Index];
+                             Write_Data := Conv_Real_Hex (Real_Data);
+                             Set_Text_Win;
+                             GotoXY(18,20); Write (Tab_Index:2);
+                             Write_SW (Write_Data);
+                            end;
+        Taste_Pfeil_Ab   : begin
+                             Tab_Index := Tab_Index - 1;
+                             if Tab_Index < 0 then  Tab_Index := 0;
+                             Real_Data := SW_Tab[Tab_Index];
+                             Write_Data := Conv_Real_Hex (Real_Data);
+                             Set_Text_Win;
+                             GotoXY(18,20); Write (Tab_Index:2);
+                             Write_SW (Write_Data);
+                           end;
+      end;  {Case}
+
+      Ini_Msg_Win;
+      Write('Step/Stop <Space>, Loop <CR>, Funkt.- u. Sondertasten benutzen!   Ende mit [X]');
+     end; {if Ch = #0 }
+
+     Mil.Timer2_Wait(10000);    {Anzeige verlangsamen}
+   until Ch in ['x','X'];
+
+99:
+ end; {Mil_SW_IW}
+
+
+function Rd_Real: Real;    {Max. 65 sec, wegen Timer 2}
+var Status    : Boolean;
+    Real_Zahl : Real;
+begin
+  Status := FALSE;
+  repeat
+   Ini_Msg_Win;
+   Write('Bitte Flie·komma-Zahl eingeben [Format 00.0]: ');
+   {$I-}                    {Fehleingabe zulassen: Compiler-Check ausschalten}
+   Readln(Real_Zahl);
+   {$I+}
+   if (IoResult <> 0) or (Real_Zahl > 65.0) or (Real_Zahl < 0.1) then
+    begin                                           {Fehler selber abfangen!}
+     Ini_Err_Win;
+     Write('ERROR: Format falsch oder Zahl nicht 0.1..65.0 !! Weiter mit <CR>');
+     ReadKey;
+    end
+   else
+     Status := True;
+  until Status = True;
+  Rd_Real   := Real_Zahl;    {Real-Zahl in Integer umwandeln}
+end; {Get_Real_10}
+
+
+
+ procedure Mil_NG_Rampe;
+ label 99;
+ const Ref_Time       = 3.2;
+       Write_Fct_Code = $06;
+       Read_Fct_Code  = $81;
+       Z_Base         = 15;
+
+ type TVorz = (Plus, Minus, Bipolar);
+      TDirection = (Up, Down);
+ var
+  MilErr  : TMilErr;
+  Fct     : TFct;
+  Polar   : TVorz;
+  Delta_U : Integer;
+  Delta_T : LongInt;
+  Zeichen : Char;
+  Zeit    : Real;
+  Sollwert: LongInt;
+  Direction: TDirection;
+
+ function Ask_Time (var Mode: TVorz; var D_U: Integer; var D_T: LongInt): Boolean;
+  label 1;
+  var Factor : Real;
+  begin
+   Ask_Time := False;
+   Mode := Plus;
+   D_U  := 0;
+   D_T  := 0;
+   Ini_Text_Win;
+   Ini_Msg_Win;                                            {, [B]ipolar}
+   Write ('Vorzeichen f. Rampe eingeben: Abruch <Esc>, <CR> fÅr +, [M] fÅr -: ');
+   Zeichen := NewReadKey;
+   case Zeichen of
+     #27    : goto 1;
+    'm','M' : Mode := Minus;
+   end;
+
+   Ini_Text_Win;
+   GotoXY(1, 22); Clreol;
+   Write ('[Rampenzeit 0.1 ... 65.0 sec]');
+   Zeit := Rd_Real;
+
+   if Zeit = Ref_Time then   {Sollwert alle 100 us incrementieren = 3.2 sec}
+    begin
+      D_U  := 1;        {Delta U: Spannung um 1 inkrementieren}
+      D_T  := 10;       {Timer 2: Ein Tick = 10 us; 10 x 10 us = 100 us}
+    end;
+
+   if Zeit > Ref_Time then
+    begin {wenn die Zeit > 3.2 sec: Zeit zwischen 2 Sollwerten lÑnger}
+      D_U  := 1;
+      D_T  := Round (10 * (Zeit/Ref_Time));
+    end {Zeit > 3.2}
+   else
+    begin
+      D_U  := Round (Ref_Time/Zeit); {Spannungsstufen grî·er}
+      D_T  := 10;
+    end; {Zeit < 3.2}
+   Ask_Time := True;
+1:
+  end; {Ask_Time}
+
+
+ begin
+   Transf_Cnt:= 0;
+   Mil_Ask_Ifc;
+   if not Ask_Time (Polar, Delta_U, Delta_T) then goto 99;
+
+   Fct.B.Adr := Ifc_Test_Nr;
+   Fct.B.Fct := Write_Fct_Code;
+
+   Ini_Text_Win;
+   GotoXY(25,02); Write('----- Rampentest fÅr Magnete -----');
+   GotoXY(05,22); TextColor (Red);
+   Write('Aus GeschwindigkeitsgrÅnden: Im Loop-Mode keine MIL-Transfer-Anzeige!!');
+   TextColor (Black);
+   GotoXY(25,05); write  ('Function-Word (Fct + Adr): ',hex_word(Fct.W),' [H]');
+
+   GotoXY(10,8);   Write ('Transfer-Count : ');
+   GotoXY(10,9);   Write ('Data     [Hex] : ');
+   TextColor (Yellow);
+   GotoXY(27,11); write (chr($18));
+   GotoXY(27,12); write ('Falls Cursor hier blinkt: Loop-Mode!!! ');
+   TextColor(Black);
+   GotoXY(10,10);  Write ('         [Volt]: ');
+
+   GotoXY(10,Z_Base);   Write ('PolaritÑt           : ');
+   if Polar = Plus then Write ('Plus ') else Write ('Minus');
+   GotoXY(10,Z_Base+1); write ('Zeitabstand [us    ]: '); Write (Delta_T * 10);
+   GotoXY(10,Z_Base+2); write ('Inkremente  [Anzahl]: '); Write (Delta_U);
+   GotoXY(10,Z_Base+3); write ('            [Volt  ]: '); Write_Real_10V_Bipol (Delta_U);
+
+   Sollwert  := 0;
+   Direction := Up;
+   Mil.Wr (Sollwert, Fct, MilErr);    {Magnet auf Sollwert=0 einstellen}
+
+   Ch := ' ';
+   if Ch = ' ' then
+     begin
+      Ini_Msg_Win;
+      Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende mit [X]');
+      repeat until KeyEPressed;
+      Ch := NewReadKey;
+      if  Ch in ['x','X'] then Goto 99;
+     end;
+
+   if not (Ch = ' ') then     {Blinkenden Cursor auf Loop-Anzeige}
+    begin
+      Set_Text_Win;
+      GotoXY (27,10);
+    end;
+
+   repeat
+    repeat
+      if Polar = Plus then
+       begin
+         if Direction = Up then
+          begin                                  {up}
+            Sollwert := Sollwert + Delta_U;
+            if Sollwert >= $7FFF then
+             begin
+              Sollwert  := $7FFF;
+              Direction := Down;
+             end;
+          end
+         else
+          begin                                  {Down}
+            Sollwert := Sollwert - Delta_U;
+            if Sollwert <= 0 then
+             begin
+              Sollwert  := 0;
+              Direction := Up;
+             end;
+          end; {if Direction}
+       end
+      else
+       begin                                     {PolaritÑt Minus}
+         if Direction = Up then
+          begin                                  {up}
+            Sollwert := Sollwert - Delta_U;
+            if Sollwert < -$8000 then
+             begin
+              Sollwert  := $8000;
+              Direction := Down;
+             end;
+          end
+         else
+          begin                                  {Down}
+            Sollwert := Sollwert + Delta_U;
+            if (Sollwert > $FFFF) then
+             begin
+              Sollwert  := 0;
+              Direction := Up;
+             end;
+          end; {if Direction}
+       end;
+
+      Mil.Wr (Sollwert, Fct, MilErr);
+      Mil.Timer2_Wait(Delta_T);
+    until KeyEPressed or (Ch = ' ');
+
+    if Ch = ' ' then
+      begin
+       Set_Text_win;
+       Transf_Cnt := Transf_Cnt+ 1;
+       GotoXY (27,8);  Write (Transf_Cnt);
+       GotoXY (27,9);  Write (Hex_Word(Sollwert));
+       GotoXY (27,10); Write_Real_10V_Bipol (Sollwert);
+
+       Ini_Msg_Win;
+       Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende mit [X]');
+       repeat until KeyEPressed;
+       Set_Text_Win;
+       GotoXY (27,8);  ClrEol;
+       GotoXY (27,9);  ClrEol;
+       GotoXY (27,10); ClrEol;
+      end;
+    Ch := NewReadKey;
+   until Ch in ['x','X'];
+ 99:
+ end; {Mil_NG_Rampe}
+
+
+ {xxx}  {Bis hierher User-Erweiterungen !!}
+BEGIN   { Hauptprogramm MIL-BASE }
+  Ifc_Test_Nr := 0;
+  Dual[1].Adr := 0;        {Init Dual-Mode Array}
+  Dual[1].Fct := 0;
+  Dual[1].Dta_ok := False;
+  Dual[1].Dta := 0;
+  Dual[2].Adr := 0;
+  Dual[2].Fct := 0;
+  Dual[2].Dta_ok := False;
+  Dual[2].Dta := 0;
+
+  REPEAT
+    menue_win;
+    User_Input := NewReadKey;
+    loop := TRUE;
+    IF User_Input IN ['0'..'9'] THEN loop := FALSE;
+    CASE User_Input OF
+     '0'      : Mil_Detect_Ifc;
+     '1'      : Mil_Detect_Ifc_Compare;
+     '2'      : begin
+                  if Check_Ifc_Adr(Ifc_Test_Nr) then Mil_Rd_HS_Ctrl (Ifc_Test_Nr);
+                end;
+     '3'      : begin
+                  if Check_Ifc_Adr(Ifc_Test_Nr) then Mil_Rd_HS_Status (Ifc_Test_Nr);
+                end;
+     '4'      : begin
+                  if Check_Ifc_Adr(Ifc_Test_Nr) then Mil_Stat_All (Ifc_Test_Nr);
+                end;
+     '5'      : begin
+                  Convert_Hex_Volt;
+                end;
+     '6'      : begin
+                  Int_Mask;
+                end;
+     '7'      : begin
+                  if Check_Ifc_Adr(Ifc_Test_Nr) then Mil_HS_Stat_Cmd (Ifc_Test_Nr);
+                end;
+     '9'      : begin
+		  if Check_Ifc_Adr(Ifc_Test_Nr) then Mil_Echo (Ifc_Test_Nr);
+                end;
+     'a', 'A' : Mil_Ask_Ifc;
+     'b', 'B' : begin
+                  Mil_Ask_Ifc;
+                  Mil_Rd_Ifc_Stat (Ifc_Test_Nr);
+                end;
+     'c', 'C' : begin
+                  Mil_Rd_Status;
+                end;
+     'd', 'D' : begin
+                  Mil_Rd_Fifo;
+                end;
+     'e', 'E' : begin
+                  if Check_Ifc_Adr(Ifc_Test_Nr) then Mil_Rd_Data;
+		end;
+     'f', 'F' : begin
+                  Functioncode_Table;
+                end;
+     'g', 'G' : begin
+                  Mil_Data := Ask_Data;
+		  Mil_WrData (Mil_Data);
+                end;
+     'h', 'H' : begin
+		  if Check_Ifc_Adr(Ifc_Test_Nr) then Mil_Wr_Fctcode;
+                end;
+     'i', 'I' : begin
+                  if Check_Ifc_Adr(Ifc_Test_Nr) THEN
+                   begin
+		     Mil_Wr (Mil_Data);
+                   end;
+                end;
+     'j', 'J' : begin
+		  if Check_Ifc_Adr(Ifc_Test_Nr) then
+		    begin
+		     Mil_Data := Ask_Data;
+		     Mil_Wr_Rd (Mil_Data);
+ 		    end;
+                end;
+     'k', 'K' : begin
+		  if Check_Ifc_Adr(Ifc_Test_Nr) then Mil_Loop;
+                end;
+
+     'l', 'L' : begin
+                  Mil_Dual_Mode;
+                end;
+     'm', 'M' : begin
+                  Mil_Stat_Tabelle;
+                end;
+     'n', 'N' : begin
+                  Mil_SW_IW;
+                end;
+     'o', 'O' : begin
+                  Mil_NG_Puls_Fix;
+                end;
+     'p', 'P' : begin
+                  Mil_NG_Puls_Vari;
+                end;
+     'q', 'Q' : begin
+                  Mil_NG_Rampe;
+                end;
+          'r', 'R' : begin
+                     end;
+          's', 'S' : begin
+                       Mil_Ask_Ifc;
+                       Mil_Data := 0;
+		       Mil_WrHall_Var (Mil_Data);
+                     end;
+          't', 'T' : begin
+                       Mil_Ask_Ifc;
+                       Mil_Data := 0;
+		       Mil_WrHall (Mil_Data);
+                     end;
+          'u', 'U' : begin
+                     end;
+    End; {CASE}
+  UNTIL user_input in ['x','X'];
+  Window(1, 1, 80, 25);
+  TextBackground(Black);
+  ClrScr;
+END. {mil_mag}
+
+
+                {Loop- und Einzelschritt-Rahmen fÅr User-Erweiterungen }
+
+   Ch := ' ';
+   if Ch = ' ' then
+     begin
+      Ini_Msg_Win;
+      Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,    Ende mit [X]');
+      repeat until KeyEPressed;
+      Ch := NewReadKey;
+      if  Ch in ['x','X'] then Goto 99;
+     end;
+
+   repeat
+    repeat
+      Set_Text_win;
+      Transf_Cnt := Transf_Cnt+ 1;
+
+    { hier kann der User seine eigenen Befehle einfÅgen!! }
+
+    until KeyEPressed or (Ch = ' ');
+    if Ch = ' ' then
+      begin
+       Ini_Msg_Win;
+       Write('Stop/Single Step mit <SPACE>, Loop mit <CR> ,  Ende mit [X]');
+       repeat until KeyEPressed;
+      end;
+    Ch := NewReadKey;
+   until Ch in ['x','X'];
+   99:
